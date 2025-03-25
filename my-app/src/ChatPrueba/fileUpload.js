@@ -22,6 +22,7 @@ import {
   getUserFiles,
   deleteFiles,
   getPresignedUrl,
+  postFilesAlert,
 } from '../services/bffService';
 import {
   ContentCopy as ContentCopyIcon,
@@ -45,15 +46,8 @@ const FileUpload = ({ isMobile }) => {
   const cachedUserInfo = localStorage.getItem('userInfo');
   const clientId = cachedUserInfo ? JSON.parse(cachedUserInfo).client_id : null;
   const token = localStorage.getItem('authToken');
-
-  const convertToBase64 = useCallback((file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = (error) => reject(error);
-      reader.readAsDataURL(file);
-    });
-  }, []);
+  const asistantId = JSON.parse(sessionStorage.getItem("asistentes"))
+  console.log(asistantId, "asistantid")
 
   const loadUploadedFiles = async () => {
     try {
@@ -88,6 +82,7 @@ const FileUpload = ({ isMobile }) => {
 
             // Subir el archivo usando la URL pre-firmada
             await uploadFile(file.name, getFileExtension(file.type), presignedUrl, token);
+            await postFilesAlert( asistantId[0].id ,token);
 
             setLoading(false);
             loadUploadedFiles();

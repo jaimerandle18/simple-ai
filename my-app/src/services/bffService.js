@@ -345,6 +345,18 @@ export const deletePeriodicJob = async (id, token) => {
     }
 };
 
+export const postFilesAlert = async (assistantId, token) => {
+    try {
+        const response = await apiClient.post(`/assistants/${assistantId}/upload-files`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        return response.data;
+    } catch (error) {
+        throw new Error(error.response?.data?.message || 'Error fetching presigned url');
+    }
+};
   
   
 
