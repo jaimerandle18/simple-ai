@@ -350,7 +350,7 @@ export const postFilesAlert = async (assistantId, token) => {
         const response = await apiClient.post(`/assistants/${assistantId}/upload-files`, {
             headers: {
                 'Authorization': `Bearer ${token}`,
-                'Access-Control-Allow-Origin': '*'
+                'Access-Control-Allow-Origin': '*', 
             }
         });
         return response.data;
