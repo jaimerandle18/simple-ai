@@ -16,7 +16,6 @@ function AssistantBox({ assistantInput, onPromptChange, onSend, loading }) {
     } else {
       setDisplayInput(originalInput);
     }
-
   }, [originalInput]);
 
   
