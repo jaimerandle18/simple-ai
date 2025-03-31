@@ -28,7 +28,7 @@ const Home = () => {
                 try {
                     const userDetails = await getUserInfo(token);
                     const assistantsData = await getAssistants(token);
-                    sessionStorage.setItem("asistentes", JSON.stringify(assistantsData));
+                    sessionStorage.setItem("asistentes", JSON.stringify(assistantsData.sort((a, b) => a.id - b.id)));
                     setNewColumns(userDetails.clientInfo.details)
                     setUserName(userDetails.name); // Assuming the user details have a 'name' field
                 } catch (error) {

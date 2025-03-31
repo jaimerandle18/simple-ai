@@ -71,11 +71,11 @@ function Header({ assistants, selectedAssistant, onAssistantChange, isMobile, na
             }
           }}
         >
-          {assistants?.map((assistant) => (
-            <MenuItem key={assistant.id} value={assistant}>
-              {assistant.name}
-            </MenuItem>
-          ))}
+     {assistants.sort((a, b) => a.id - b.id).map((assistant) => (
+  <MenuItem key={assistant.id} value={assistant}>
+    {assistant.name}
+  </MenuItem>
+))}
         </Select>
           <FileUpload  isMobile={isMobile} />
       </div>

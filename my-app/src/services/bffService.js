@@ -251,7 +251,7 @@ export const deleteFiles = async (userId, token, file) => {
 
 export const createPeriodicJob = async (clientId, name, params, token, schedule) => {
     try {
-        const response = await fetch('https://uzsdo6wiqd67bpntxajmtpczia0sanpr.lambda-url.us-east-1.on.aws/periodicjobs', {
+        const response = await fetch('https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -279,7 +279,7 @@ export const createPeriodicJob = async (clientId, name, params, token, schedule)
 
 export const getPeriodicJobs = async (clientId, token) => {
     try {
-        const response = await fetch(`https://uzsdo6wiqd67bpntxajmtpczia0sanpr.lambda-url.us-east-1.on.aws/periodicjobs?client_id=${clientId}`, {
+        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs?client_id=${clientId}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -300,7 +300,7 @@ export const getPeriodicJobs = async (clientId, token) => {
 
 export const updatePeriodicJob = async (id, campaignData, token) => {
     try {
-        const response = await fetch(`https://uzsdo6wiqd67bpntxajmtpczia0sanpr.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
+        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
@@ -326,7 +326,7 @@ export const updatePeriodicJob = async (id, campaignData, token) => {
 
 export const deletePeriodicJob = async (id, token) => {
     try {
-        const response = await fetch(`https://uzsdo6wiqd67bpntxajmtpczia0sanpr.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
+        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -347,11 +347,10 @@ export const deletePeriodicJob = async (id, token) => {
 
 export const postFilesAlert = async (assistantId, token) => {
     try {
-        const response = await apiClient.post(`/assistants/${assistantId}/upload-files`, {
+        const response = await apiClient.post(`/assistants/${assistantId}/upload-files`, {},{
             headers: {
                 'Authorization': `Bearer ${token}`,
-                'Access-Control-Allow-Origin': '*', 
-            }
+            },
         });
         return response.data;
     } catch (error) {

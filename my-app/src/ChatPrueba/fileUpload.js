@@ -76,12 +76,12 @@ const FileUpload = ({ isMobile }) => {
         };
         try {
             // Obtener la URL pre-firmada desde el backend
-            const presignedUrlResponse = await getPresignedUrl(file.name, getFileExtension(file.type), token, file.size, clientId);
+            const presignedUrlResponse = await getPresignedUrl(file.name?.replaceAll(" ", "-"), getFileExtension(file.type), token, file.size, clientId);
 
             const presignedUrl = presignedUrlResponse.url;
 
             // Subir el archivo usando la URL pre-firmada
-            await uploadFile(file.name, getFileExtension(file.type), presignedUrl, token);
+            await uploadFile(file.name?.replaceAll(" ", "-"), getFileExtension(file.type), presignedUrl, token);
             await postFilesAlert( asistantId[0].id ,token);
 
             setLoading(false);
@@ -99,6 +99,7 @@ const FileUpload = ({ isMobile }) => {
     try {
       if (fileToDelete) {
         await deleteFiles(clientId, token, fileToDelete);
+        await postFilesAlert( asistantId[0].id ,token);
         loadUploadedFiles();
         setOpenDeleteModal(false);
       }
