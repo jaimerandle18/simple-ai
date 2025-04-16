@@ -1,38 +1,122 @@
 /* src/components/Navbar.css */
 
 .user-icon-wrapper {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background-color 0.3s ease;
-    border-radius: 50%;
-    padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.3s ease;
+  border-radius: 50%;
+  padding: 8px;
+  cursor: pointer;
 }
 
 .user-icon-wrapper:hover {
-   
-    box-shadow: 0 16px 54px 14px rgba(138, 43, 226, 0.5);
+  box-shadow: 0 16px 54px 14px rgba(138, 43, 226, 0.5);
 }
-.NAVBAR {
-    background-image: url('../assets/backgorundSimple.png'); /* Cambia la ruta según corresponda */
-    background-size: cover;
-    background-repeat: no-repeat;
-    position: relative;
-    overflow: hidden;
-    height: 73px;
-    z-index: 9999;
-  }
-  
-  /* Capa superpuesta para agregar el color violeta/rosado con transparencia */
-  .NAVBAR::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(62, 28, 82, 0.872); /* Aquí defines el color con transparencia */
-    z-index: 0; /* Coloca la capa encima */
-    pointer-events: none; /* Deja que el usuario interactúe con los elementos debajo */
-  }
 
+.NAVBAR {
+  background-image: url('../assets/backgorundSimple.png'); /* Cambia la ruta según corresponda */
+  background-size: cover;
+  background-repeat: no-repeat;
+  position: relative;
+  overflow: hidden;
+  height: 73px;
+  z-index: 1001; /* Asegura un z-index alto para el navbar */
+}
+
+/* Capa superpuesta para agregar el color violeta/rosado con transparencia */
+.NAVBAR::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(62, 28, 82, 0.872); /* Aquí defines el color con transparencia */
+  z-index: 0; /* Coloca la capa encima */
+  pointer-events: none; /* Deja que el usuario interactúe con los elementos debajo */
+}
+
+/* Estilos para la barra lateral (pantallas no móviles) */
+.sidebar-toggle {
+  margin-left: 20px; /* Espacio del icono del menú */
+}
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  right: -300px; /* Inicialmente oculto fuera de la pantalla */
+  width: 300px;
+  height: 100%;
+  background-color: white;
+  box-shadow: -2px 0px 5px rgba(231, 0, 239, 0.2);
+  z-index: 1003; /* Mayor que el overlay */
+  transition: right 0.3s ease-in-out;
+  overflow-y: auto; /* Para contenido largo */
+  cursor: pointer;
+}
+
+.sidebar.open {
+  right: 0; /* Se desliza hacia la vista */
+}
+
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.3); /* Fondo oscuro y semitransparente */
+  z-index: 1002; /* Debajo del sidebar */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+}
+
+.sidebar-overlay {
+  cursor: pointer; /* Indica que se puede hacer clic para cerrar */
+}
+
+.sidebar.open + .sidebar-overlay {
+  opacity: 1;
+  visibility: visible;
+}
+
+.sidebar-content {
+  padding: 20px;
+  color:black
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.close-sidebar {
+  background: none;
+  border: none;
+  font-size: 1.5em;
+  cursor: pointer;
+}
+
+.sidebar-content a {
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  text-decoration: none;
+  color: rgba(62, 28, 82, 0.872);
+  gap: 10px;
+}
+
+.sidebar-content a:hover {
+  background-color: rgb(54, 5, 81);
+  width: 100% ;
+  padding: 15px;
+  color:white !important
+}
+
+
+/* Estilos para la navegación móvil (se mantiene como estaba) */
+/* No se requieren estilos adicionales específicos aquí ya que los estilos inline en el JSX son suficientes */

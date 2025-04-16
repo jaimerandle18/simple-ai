@@ -9,6 +9,7 @@ import UserStats from './dashboard/userStadistics';
 import { setupInterceptors } from './services/apiClient';
 import ChatPrueba from './ChatPrueba/chatPrueba';
 import CampañaScreen from './Remarketing/CampScreen';
+import InsurersScreen from './Seguros/insurersScreen';
 
 
 const App= () => {
@@ -25,6 +26,7 @@ const App= () => {
                 <Route path="/dashboard" element={ <UserStats />}/>
                 <Route path="/chatTest" element={ <ChatPrueba />}/>
                 <Route path="/remarketing" element={ <CampañaScreen />}/>
+                <Route path="/Seguros" element={ <InsurersScreen />}/>
             </Routes>
         </Router>
     );

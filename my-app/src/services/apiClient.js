@@ -2,7 +2,7 @@
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
-const BASE_URL = 'https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/';
+const BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 const apiClient = axios.create({
     baseURL: BASE_URL,
@@ -16,10 +16,9 @@ export const setupInterceptors = (navigate) => {
         response => response,
         error => {
             if (error.response && error.response.status === 401) {
-                // Si la respuesta es un 401, limpia los storage y redirige al login
                 localStorage.clear();
                 sessionStorage.clear();
-                navigate('/'); // Redirige al login
+                navigate('/');
             }
             return Promise.reject(error);
         }

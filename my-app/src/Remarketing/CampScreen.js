@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box, Typography, useMediaQuery } from '@mui/material';
 import Formulario from './FormRemark';
 import CampañasListadas from './ListCamp';
 import Notificaciones from './Notification';
@@ -10,7 +10,7 @@ const CampañaScreen = () => {
     const [campaigns, setCampaigns] = useState([]); // Estado para las campañas
     const [openSnack, setOpenSnack] = useState(false);
     const [campaignAdded, setCampaignAdded] = useState(false);
-
+    const isMobile = useMediaQuery('(max-width:600px)');
 
     const handleCampaignSaved = () => {
         setOpenSnack(true);
@@ -35,9 +35,9 @@ const CampañaScreen = () => {
             <Navbar />
             <div style={{ height: '100vh', padding: '2%', overflow: "auto" }}>
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <Typography variant="h5" gutterBottom style={{ color: "black", fontWeight: "bold" }}>
-                        Crear Campaña de Remarketing
-                    </Typography>
+                <h1 style={{ fontSize:isMobile?"25px":"25px", color: "purple", marginTop: "10px" }}>
+                       Remarketing
+                    </h1>
 
                     <Formulario onCampaignSaved={handleCampaignSaved} updateCampaigns={updateCampaigns} /> {/* Pasa updateCampaigns */}
 

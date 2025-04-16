@@ -152,16 +152,16 @@ const FileUpload = ({ isMobile }) => {
         variant="outlined"
         startIcon={<CloudUploadIcon />}
         onClick={() => setIsModalOpen(true)}
-        sx={{ width: isMobile ? '100%' : 'auto', mb: 2 , height:"50px" }}
+        sx={{ width: isMobile ? '100%' : 'auto', mb: 1 , height:"50px", fontSize:"13px" }}
       >
-        Cargar archivos
+       Mis Archivos
       </Button>
 
       <Dialog open={isModalOpen} onClose={() => setIsModalOpen(false)} fullWidth maxWidth="md" style={{marginTop:"50px"}}>
         <DialogContent sx={{ maxHeight: '600px', overflowY: 'auto' }}> {/* Altura máxima y scroll */}
           <FileUploadInfo />
           <Divider sx={{ my: 2 }} />
-          <Typography variant="h6" gutterBottom>Archivos cargados:</Typography>
+          <Typography variant="h6" gutterBottom>Archivos disponibles:</Typography>
           <Paper elevation={3} sx={{ p: 2, maxHeight: '300px', overflowY: 'auto' }}> {/* Altura máxima y scroll */}
             <List>
               {uploadedFiles.map((file, index) => (

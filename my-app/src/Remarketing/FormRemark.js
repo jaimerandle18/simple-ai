@@ -25,11 +25,9 @@ import Loading from '../components/Loading';
 
 const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
   const [message, setMessage] = useState('');
-  const [title, setTitle] = useState('');
   const [frequency, setFrequency] = useState('');
   const [dayOfWeek, setDayOfWeek] = useState('');
-  const [startDateDaysAgo, setStartDateDaysAgo] = useState('');
-  const [endDateDaysAgo, setEndDateDaysAgo] = useState('');
+  const [waitHours, setWaitHours] = useState('');
   const [openModal, setOpenModal] = useState(false);
   const [originalValues, setOriginalValues] = useState({});
   const isFirstRender = useRef(true);
@@ -50,20 +48,16 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
         if (campaigns && campaigns.length > 0) {
           const campaign = campaigns[0];
           setCampaignId(campaign.id);
-          setTitle(campaign.name);
           setMessage(campaign.config?.params?.prompt || '');
           const freq = scheduleToFrequency(campaign.schedule);
           setFrequency(freq.frequency);
           setDayOfWeek(freq.dayOfWeek);
-          setStartDateDaysAgo(campaign.config?.params?.minAgeHoursStart / 24);
-          setEndDateDaysAgo(campaign.config?.params?.minAgeHoursEnd / 24);
+          setWaitHours(campaign.config?.params?.minAgeHoursStart || '');
           setOriginalValues({
             message: campaign.config?.params?.prompt || '',
-            title: campaign.name,
             frequency: freq.frequency,
             dayOfWeek: freq.dayOfWeek,
-            startDateDaysAgo: campaign.config?.params?.minAgeHoursStart / 24,
-            endDateDaysAgo: campaign.config?.params?.minAgeHoursEnd / 24,
+            waitHours: campaign.config?.params?.minAgeHoursStart || '',
           });
         }
       } catch (error) {
@@ -142,10 +136,6 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
     setMessage(e.target.value);
   };
 
-  const handleTitleChange = (e) => {
-    setTitle(e.target.value);
-  };
-
   const handleFrequencyChange = (e) => {
     setFrequency(e.target.value);
     if (e.target.value !== 'oneDay') {
@@ -157,12 +147,8 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
     setDayOfWeek(e.target.value);
   };
 
-  const handleStartDateDaysAgoChange = (e) => {
-    setStartDateDaysAgo(e.target.value);
-  };
-
-  const handleEndDateDaysAgoChange = (e) => {
-    setEndDateDaysAgo(e.target.value);
+  const handleWaitHoursChange = (e) => {
+    setWaitHours(e.target.value);
   };
 
   const frequencyToHours = (freq) => {
@@ -179,11 +165,9 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
   const checkChanges = () => {
     return (
       message !== originalValues.message ||
-      title !== originalValues.title ||
       frequency !== originalValues.frequency ||
       dayOfWeek !== originalValues.dayOfWeek ||
-      startDateDaysAgo !== originalValues.startDateDaysAgo ||
-      endDateDaysAgo !== originalValues.endDateDaysAgo
+      waitHours !== originalValues.waitHours
     );
   };
 
@@ -222,45 +206,37 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
         const task = 'REMARKETING';
         const prompt = message;
 
-        const endDateHours = parseInt(endDateDaysAgo) * 24;
-        const startDateHours = parseInt(startDateDaysAgo) * 24;
+        const waitTimeInHours = parseInt(waitHours) || 0;
 
         const params = {
-          task: task,
-          params: {
-            clientId: clientId,
-            assistantId: assistant[0].id,
-            channelType: 7,
-            minAgeHoursStart: endDateHours.toString(),
-            minAgeHoursEnd: startDateHours.toString(),
-            prompt: prompt,
-          },
+          clientId: clientId,
+          assistantId: assistant[0].id,
+          channelType: 7,
+          minAgeHoursStart: waitTimeInHours.toString(),
+          prompt: prompt,
+          schedule: schedule,
         };
 
         if (campaignId) {
-            await updatePeriodicJob(campaignId, { name: title, config: params, schedule }, token);
+            await updatePeriodicJob(campaignId, { config: params, schedule }, token);
           } else {
-            const newCampaign = await createPeriodicJob(clientId, title, params, token, schedule);
-            setCampaignId(newCampaign.id); // Actualizar campaignId con el ID de la nueva campaña
+            const newCampaign = await createPeriodicJob(clientId, 'REMARKETING', params, token, schedule);
+            setCampaignId(newCampaign.id);
           }
        const campaigns = await getPeriodicJobs(clientId, token);
         if (campaigns && campaigns.length > 0) {
           const campaign = campaigns[0];
           setCampaignId(campaign.id);
-          setTitle(campaign.name);
           setMessage(campaign.config?.params?.prompt || '');
           const freq = scheduleToFrequency(campaign.schedule);
           setFrequency(freq.frequency);
           setDayOfWeek(freq.dayOfWeek);
-          setStartDateDaysAgo(campaign.config?.params?.minAgeHoursStart / 24);
-          setEndDateDaysAgo(campaign.config?.params?.minAgeHoursEnd / 24);
+          setWaitHours(campaign.config?.params?.minAgeHoursStart || '');
           setOriginalValues({
             message: campaign.config?.params?.prompt || '',
-            title: campaign.name,
             frequency: freq.frequency,
             dayOfWeek: freq.dayOfWeek,
-            startDateDaysAgo: campaign.config?.params?.minAgeHoursStart / 24,
-            endDateDaysAgo: campaign.config?.params?.minAgeHoursEnd / 24,
+            waitHours: campaign.config?.params?.minAgeHoursStart || '',
           });
         }
 
@@ -281,16 +257,15 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
 
   React.useEffect(() => {
     if (isFirstRender.current) {
-      setOriginalValues({ message, title, frequency, dayOfWeek, startDateDaysAgo, endDateDaysAgo });
+      setOriginalValues({ message, frequency, dayOfWeek, waitHours });
       isFirstRender.current = false;
     }
   }, []);
 
   const tooltipMessages = {
-    title: { title: 'Título de la Campaña', description: 'Asigna un nombre descriptivo a tu campaña para identificarla fácilmente.' },
-    message: { title: 'Descripción del Remarketing', description: 'Indica cómo quieres que tu asistente realice el remarketing. Sé específico sobre el mensaje y la estrategia.' },
-    frequency: { title: 'Frecuencia de Ejecución', description: 'Selecciona cada cuántos días se ejecutará el remarketing. Por ejemplo, cada 2 días o cada 10 días.' },
-    days: { title: 'Rango de Fechas', description: 'Define el período de tiempo, en numero de dias, en el que tu asistente enfocará el remarketing. Indica los días hacia atrás desde el momento actual.' },
+    message: { title: 'Instrucciones', description: 'Indica cómo quieres que tu asistente realice el remarketing. Sé específico sobre el mensaje y la estrategia.' },
+    frequency: { title: 'Frecuencia de Ejecución', description: 'Selecciona cada cuánto tiempo se ejecutará el remarketing.' },
+    days: { title: 'Tiempo de espera para ejecutar el remarking', description: 'Define el tiempo de espera en horas antes de que tu asistente inicie el remarketing después de la última interacción.' },
   };
 
   const renderTooltip = (field) => (
@@ -317,12 +292,10 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
       await deletePeriodicJob(campaignId, token);
       setSuccessMessage('Eliminaste tu campaña con éxito.');
       setTimeout(() => setSuccessMessage(''), 3000);
-      setTitle('');
       setMessage('');
       setFrequency('');
       setDayOfWeek('');
-      setStartDateDaysAgo('');
-      setEndDateDaysAgo('');
+      setWaitHours('');
       setCampaignId(null);
       setOriginalValues({});
       setDeleteModalOpen(false);
@@ -342,7 +315,7 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
       flexDirection: 'column',
       alignItems: 'center',
       width: '60%',
-      minHeight: '600px', // Aumenta la altura mínima de la caja
+      minHeight: '600px',
       padding: '24px',
       '& .MuiInputLabel-root': {
         color: 'black'
@@ -360,21 +333,6 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
               {successMessage}
             </Typography>
           )}
-
-          <Box sx={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: '16px' }}>
-            <TextField
-              label="Título de la Campaña"
-              multiline
-              rows={1}
-              value={title}
-              onChange={handleTitleChange}
-              variant="outlined"
-              fullWidth
-              size="small"
-              sx={{ flexGrow: 1, marginRight: '8px' }}
-            />
-            {renderTooltip('title')}
-          </Box>
 
           <Modal
             open={openModal}
@@ -433,7 +391,7 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
           <Box sx={{ display: 'flex', width: '100%', alignItems: 'center', marginBottom: '16px' }}>
             <TextField
               helperText="ej: de acuerdo a lo que estuvimos hablando, preguntame si pude realizar la compra"
-              label="Descripción del Remarketing"
+              label="Instrucciones"
               multiline
               rows={4}
               value={message}
@@ -489,28 +447,16 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
             </Box>
           )}
           <div style={{ width: '90%' }}>
-            <div style={{ textAlign: 'center', marginBottom: '16px', fontSize: '1.2em', fontWeight: 'bold' }}>
-              Antigüedad de las conversaciones:
+            <div style={{ textAlign: 'center', marginBottom: '16px', fontSize: '1em', fontWeight: 'bold' }}>
+              Tiempo de espera para ejecutar el remarketing (en horas):
             </div>
             <Grid container spacing={2} sx={{ marginBottom: '16px', display: 'flex', justifyContent: 'center' }}>
-              <Grid item xs={5} sx={{ display: 'flex', alignItems: 'center' }}>
-                <TextField
-                  label="Antigüedad maxima (en dias)"
-                  type="number"
-                  value={startDateDaysAgo}
-                  onChange={handleStartDateDaysAgoChange}
-                  variant="outlined"
-                  fullWidth
-                  size="small"
-                  sx={{ flexGrow: 1, marginRight: '8px' }}
-                />
-              </Grid>
               <Grid item xs={6} sx={{ display: 'flex', alignItems: 'center' }}>
                 <TextField
-                  label="Antigüedad minima (en dias)"
+                  label="Horas"
                   type="number"
-                  value={endDateDaysAgo}
-                  onChange={handleEndDateDaysAgoChange}
+                  value={waitHours}
+                  onChange={handleWaitHoursChange}
                   variant="outlined"
                   fullWidth
                   size="small"
@@ -530,7 +476,7 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
               },
             }}
           >
-            {campaignId? "Actualizar Campaña" : "Enviar Campaña"}  
+            {campaignId? "Actualizar Campaña" : "Enviar Campaña"}
           </Button>
           {campaignId && (
             <Button

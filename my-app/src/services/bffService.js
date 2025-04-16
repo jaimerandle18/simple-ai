@@ -250,8 +250,9 @@ export const deleteFiles = async (userId, token, file) => {
 };
 
 export const createPeriodicJob = async (clientId, name, params, token, schedule) => {
+    const baseUrl = process.env.REACT_APP_API_BASE_URL;
     try {
-        const response = await fetch('https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs', {
+        const response = await fetch (`${baseUrl}/periodicjobs`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -259,7 +260,7 @@ export const createPeriodicJob = async (clientId, name, params, token, schedule)
             },
             body: JSON.stringify({ // Serializa el cuerpo como JSON
                 client_id: clientId,
-                name: name,
+                task:name,
                 config: params, // No necesitas serializar params aquí, ya que JSON.stringify lo hace
                 schedule: schedule,
             }),
@@ -278,8 +279,9 @@ export const createPeriodicJob = async (clientId, name, params, token, schedule)
 };
 
 export const getPeriodicJobs = async (clientId, token) => {
+    const baseUrl = process.env.REACT_APP_API_BASE_URL;
     try {
-        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs?client_id=${clientId}`, {
+        const response = await fetch(`${baseUrl}/periodicjobs?client_id=${clientId}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -298,16 +300,16 @@ export const getPeriodicJobs = async (clientId, token) => {
     }
 };
 
-export const updatePeriodicJob = async (id, campaignData, token) => {
+export const updatePeriodicJob = async (id, campaignData, token ) => {
+    const baseUrl = process.env.REACT_APP_API_BASE_URL;
     try {
-        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
+        const response = await fetch(`${baseUrl}/periodicjobs/${id}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
             },
             body: JSON.stringify({ // Construye un objeto con los datos
-                name: campaignData.name,
                 config: campaignData.config,
                 schedule: campaignData.schedule,
             }),
@@ -325,8 +327,9 @@ export const updatePeriodicJob = async (id, campaignData, token) => {
 };
 
 export const deletePeriodicJob = async (id, token) => {
+    const baseUrl = process.env.REACT_APP_API_BASE_URL;
     try {
-        const response = await fetch(`https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/periodicjobs/${id}`, {
+        const response = await fetch(`${baseUrl}/periodicjobs/${id}`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -358,5 +361,58 @@ export const postFilesAlert = async (assistantId, token) => {
     }
 };
   
+export const createInsurer = async (insurerData) => {
+    const token = localStorage.getItem('authToken');
+    try {
+      const response = await apiClient.post('/insurers', insurerData, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error creating insurer');
+    }
+  };
   
-
+  export const updateInsurer = async (insurerName, insurerData) => {
+    const token = localStorage.getItem('authToken');
+    try {
+      const response = await apiClient.put(`/insurers/${insurerName}`, insurerData, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error updating insurer');
+    }
+  };
+  
+  export const deleteInsurer = async (insurerName) => {
+    const token = localStorage.getItem('authToken');
+    try {
+      const response = await apiClient.delete(`/insurers/${insurerName}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error deleting insurer');
+    }
+  };
+  
+  export const getInsurers = async () => {
+    const token = localStorage.getItem('authToken');
+    try {
+      const response = await apiClient.get('/insurers', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error fetching insurers');
+    }
+  };
