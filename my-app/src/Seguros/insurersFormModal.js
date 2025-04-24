@@ -8,8 +8,8 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
     setShowPasswordFields(!showPasswordFields);
   };
 
-  const isEditingWithUsername = !!selectedInsurer?.username;
-  const isCreatingNew = !selectedInsurer?.username;
+  const isEditingWithUsername = !!selectedInsurer?.userName;
+  const isCreatingNew = !selectedInsurer?.userName;
   const buttonText = isEditingWithUsername && showPasswordFields ? 'Actualizar Contraseña' : 'Guardar';
 
   return (
@@ -17,20 +17,20 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
       <Box sx={{ position: 'absolute', top: isEditingWithUsername? "50%": "57%", left: '50%', transform: 'translate(-50%, -50%)', width: 400, bgcolor: 'background.paper', boxShadow: 24, p: 4 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 2 }}>
           {selectedInsurer?.imageUrl ? (
-            <Avatar src={selectedInsurer.imageUrl} alt={selectedInsurer.name} sx={{ width: 80, height: 80, mb: 1 }} />
+            <Avatar src={selectedInsurer.imageUrl} alt={selectedInsurer.companyName} sx={{ width: 80, height: 80, mb: 1 }} />
           ) : (
             <Avatar sx={{ width: 80, height: 80, bgcolor: 'primary.main', color: 'white', fontSize: '1.5rem', mb: 1 }}>
-              {selectedInsurer?.name?.charAt(0).toUpperCase()}
+              {selectedInsurer?.companyName?.charAt(0).toUpperCase()}
             </Avatar>
           )}
-          <Typography variant="h6">{selectedInsurer ? `Editar ${selectedInsurer.name}` : `Agregar aseguradora`}</Typography>
+          <Typography variant="h6">{selectedInsurer ? `Editar ${selectedInsurer.companyName}` : `Agregar aseguradora`}</Typography>
         </Box>
         <form onSubmit={onSubmit}>
           {!selectedInsurer && (
             <TextField
               label="Nombre de la Aseguradora"
               name="name"
-              value={formData.name}
+              value={formData.companyName}
               onChange={onChange}
               fullWidth
               margin="normal"
@@ -41,7 +41,7 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
           <TextField
             label="Email"
             name="username"
-            value={formData.username}
+            value={formData.userName}
             onChange={onChange}
             fullWidth
             margin="normal"

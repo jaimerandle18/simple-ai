@@ -4,7 +4,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 
 const InsurerCard = ({ insurer, onClick, width }) => {
-  const hasCredentials = insurer?.username;
+  const hasCredentials = insurer?.userName;
 
   return (
     <Card
@@ -22,11 +22,11 @@ const InsurerCard = ({ insurer, onClick, width }) => {
     >
       <CardContent>
         <Typography variant="h6" style={{ display: 'flex', justifyContent: 'center' }}>
-          {insurer.name}
+          {insurer.companyName}
         </Typography>
         {insurer.imageUrl && (
           <Box sx={{ display: 'flex', justifyContent: 'center', marginTop: '8px' }}>
-            <Avatar src={insurer.imageUrl} alt={insurer.name} sx={{ width: 56, height: 56 }} />
+            <Avatar src={insurer.imageUrl} alt={insurer.companyName} sx={{ width: 56, height: 56 }} />
           </Box>
         )}
         <Box

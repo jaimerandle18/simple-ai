@@ -39,40 +39,49 @@ const CampañasListadas = ({ campaign, campaignAdded }) => {
     }, [localCampaignAdded]);
 
     const handleCampaignClick = (campaign) => {
+        console.log('Campaña seleccionada:', campaign);
         setSelectedCampaign(campaign);
-        setEditedCampaign({
-            ...campaign,
-            config: {
-                params: {
-                    ...campaign.config?.params,
-                    prompt: campaign.config?.params?.prompt || '',
-                },
-            },
-        });
-        setEditedFrequency(scheduleToFrequency(campaign.schedule));
-        setEditedStartDateDaysAgo(campaign.config?.params?.minAgeHoursStart / 24);
-        setEditedEndDateDaysAgo(campaign.config?.params?.minAgeHoursEnd / 24);
+        // Aseguramos una copia profunda del objeto campaign
+        setEditedCampaign(JSON.parse(JSON.stringify(campaign)));
+        console.log('Estado editedCampaign inicial:', JSON.parse(JSON.stringify(campaign)));
+        const frequency = scheduleToFrequency(campaign.schedule);
+        console.log('Schedule de la campaña:', campaign.schedule);
+        console.log('Frecuencia convertida:', frequency);
+        setEditedFrequency(frequency);
+        const startDate = campaign.config?.params?.minAgeHoursStart / 24;
+        const endDate = campaign.config?.params?.minAgeHoursEnd / 24;
+        console.log('Días atrás (Inicio):', startDate);
+        console.log('Días atrás (Fin):', endDate);
+        setEditedStartDateDaysAgo(startDate);
+        setEditedEndDateDaysAgo(endDate);
         setIsModalOpen(true);
     };
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
+        setEditedCampaign(null); // Reseteamos el estado al cerrar el modal
     };
 
     const handleInputChange = (e) => {
-        if (e.target.name === 'message') {
-            setEditedCampaign({
-                ...editedCampaign,
+        const { name, value } = e.target;
+        if (name === 'message') {
+            setEditedCampaign(prev => ({
+                ...prev,
                 config: {
+                    ...prev.config,
                     params: {
-                        ...editedCampaign.config.params,
-                        prompt: e.target.value,
+                        ...prev.config.params,
+                        prompt: value,
                     },
                 },
-            });
+            }));
         } else {
-            setEditedCampaign({ ...editedCampaign, [e.target.name]: e.target.value });
+            setEditedCampaign(prev => ({
+                ...prev,
+                [name]: value,
+            }));
         }
+        // console.log(editedCampaign); // Para verificar la actualización del estado
     };
 
     const frequencyToHours = (freq) => {
@@ -127,8 +136,8 @@ const CampañasListadas = ({ campaign, campaignAdded }) => {
                 config: {
                     params: {
                         ...editedCampaign.config.params,
-                        minAgeHoursStart: editedStartDateDaysAgo * 24,
-                        minAgeHoursEnd: editedEndDateDaysAgo * 24,
+                        minAgeHoursStart: Number(editedStartDateDaysAgo) * 24,
+                        minAgeHoursEnd: Number(editedEndDateDaysAgo) * 24,
                     },
                 },
             };
@@ -136,6 +145,7 @@ const CampañasListadas = ({ campaign, campaignAdded }) => {
             const updatedCampaigns = campaigns.map(campaign => campaign.id === editedCampaign.id ? updatedCampaign : campaign);
             setCampaigns(updatedCampaigns);
             setIsModalOpen(false);
+            setEditedCampaign(null); // Reseteamos el estado después de guardar
         } catch (error) {
             console.error('Error al actualizar la campaña:', error);
         }
@@ -177,7 +187,7 @@ const CampañasListadas = ({ campaign, campaignAdded }) => {
                 paddingBottom: '56px',
             }}>
                 {campaigns?.length > 0 ? (
-                    campaigns.map((campaign) => (
+                    campaigns.map((campaign) => (   
                         <Box
                             key={campaign.id}
                             sx={{

@@ -12,7 +12,6 @@ import {
   IconButton,
   Typography,
   Modal,
-  Paper,
 } from '@mui/material';
 import {
   createPeriodicJob,
@@ -23,7 +22,7 @@ import {
 import Info from '@mui/icons-material/Info';
 import Loading from '../components/Loading';
 
-const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
+const Formulario = ({ onCampaignSaved }) => {
   const [message, setMessage] = useState('');
   const [frequency, setFrequency] = useState('');
   const [dayOfWeek, setDayOfWeek] = useState('');
@@ -48,17 +47,24 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
         if (campaigns && campaigns.length > 0) {
           const campaign = campaigns[0];
           setCampaignId(campaign.id);
-          setMessage(campaign.config?.params?.prompt || '');
+          setMessage(campaign.config?.prompt || ''); // Accede a campaign.config.prompt
           const freq = scheduleToFrequency(campaign.schedule);
           setFrequency(freq.frequency);
           setDayOfWeek(freq.dayOfWeek);
-          setWaitHours(campaign.config?.params?.minAgeHoursStart || '');
+          setWaitHours(campaign.config?.minAgeHoursStart || ''); // Accede a campaign.config.minAgeHoursStart
           setOriginalValues({
-            message: campaign.config?.params?.prompt || '',
+            message: campaign.config?.prompt || '',
             frequency: freq.frequency,
             dayOfWeek: freq.dayOfWeek,
-            waitHours: campaign.config?.params?.minAgeHoursStart || '',
+            waitHours: campaign.config?.minAgeHoursStart || '',
           });
+        } else {
+          setMessage('');
+          setFrequency('');
+          setDayOfWeek('');
+          setWaitHours('');
+          setCampaignId(null);
+          setOriginalValues({});
         }
       } catch (error) {
         console.error('Error al obtener la campaña:', error);
@@ -218,32 +224,34 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
         };
 
         if (campaignId) {
-            await updatePeriodicJob(campaignId, { config: params, schedule }, token);
-          } else {
-            const newCampaign = await createPeriodicJob(clientId, 'REMARKETING', params, token, schedule);
-            setCampaignId(newCampaign.id);
-          }
-       const campaigns = await getPeriodicJobs(clientId, token);
+          await updatePeriodicJob(campaignId, { config: params, schedule }, token);
+        } else {
+          const newCampaign = await createPeriodicJob(clientId, 'REMARKETING', params, token, schedule);
+          setCampaignId(newCampaign.id);
+        }
+
+        // Después de la actualización (o creación), volvemos a obtener los datos
+        const campaigns = await getPeriodicJobs(clientId, token);
+        console.log('Respuesta de getPeriodicJobs después de la actualización:', campaigns);
         if (campaigns && campaigns.length > 0) {
           const campaign = campaigns[0];
           setCampaignId(campaign.id);
-          setMessage(campaign.config?.params?.prompt || '');
+          setMessage(campaign.config?.prompt || '');
           const freq = scheduleToFrequency(campaign.schedule);
           setFrequency(freq.frequency);
           setDayOfWeek(freq.dayOfWeek);
-          setWaitHours(campaign.config?.params?.minAgeHoursStart || '');
+          setWaitHours(campaign.config?.minAgeHoursStart || '');
           setOriginalValues({
-            message: campaign.config?.params?.prompt || '',
+            message: campaign.config?.prompt || '',
             frequency: freq.frequency,
             dayOfWeek: freq.dayOfWeek,
-            waitHours: campaign.config?.params?.minAgeHoursStart || '',
+            waitHours: campaign.config?.minAgeHoursStart || '',
           });
         }
 
         onCampaignSaved();
-        updateCampaigns();
         setOpenModal(false);
-        setSuccessMessage('Tu campaña se creó/actualizó con éxito.');
+        setSuccessMessage(`Tu campaña se ${campaignId ? 'actualizó' : 'creó'} con éxito.`);
         setTimeout(() => setSuccessMessage(''), 3000);
       } catch (error) {
         console.error('Error al crear/actualizar la campaña:', error);
@@ -299,7 +307,7 @@ const Formulario = ({ onCampaignSaved, updateCampaigns }) => {
       setCampaignId(null);
       setOriginalValues({});
       setDeleteModalOpen(false);
-      await updateCampaigns();
+      // No necesitamos llamar a updateCampaigns aquí ya que el formulario se resetea
     } catch (error) {
       console.error('Error al eliminar la campaña:', error);
     }

@@ -7,10 +7,10 @@ import { createInsurer, updateInsurer, deleteInsurer, getInsurers } from "../ser
 import { ToastContainer, toast } from 'react-toastify';
 
 const defaultInsurersData = [
-  { id: 1, name: 'Galicia', imageUrl: "https://segurocelular.com.ar/wp-content/uploads/2021/10/Galicia-logo-seguro-celu.png" },
-  { id: 2, name: 'Sis', imageUrl: "https://media.licdn.com/dms/image/v2/C4E0BAQHO8MVxJ2g5Ug/company-logo_200_200/company-logo_200_200/0/1637947009059/sisperuoficial_logo?e=2147483647&v=beta&t=yKHHFxPSHCnH7hj2sZRceXB777SHNksrujZrQ8eAaOs" },
-  { id: 3, name: 'Swiss Medical', imageUrl: "https://www.swissmedical.com.ar/subsitio/swissmedicalseguros/assets/img/smg_seguros.svg" },
-  { id: 4, name: 'Meridional', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSMKPnO1qZ4ozDTBa9G-BKnCKbHkNWlB9KwhA&s" },
+  { id: 1, companyName: 'Galicia', imageUrl: "https://segurocelular.com.ar/wp-content/uploads/2021/10/Galicia-logo-seguro-celu.png" },
+  { id: 2, companyName: 'Sis', imageUrl: "https://media.licdn.com/dms/image/v2/C4E0BAQHO8MVxJ2g5Ug/company-logo_200_200/company-logo_200_200/0/1637947009059/sisperuoficial_logo?e=2147483647&v=beta&t=yKHHFxPSHCnH7hj2sZRceXB777SHNksrujZrQ8eAaOs" },
+  { id: 3, companyName: 'Swiss Medical', imageUrl: "https://www.swissmedical.com.ar/subsitio/swissmedicalseguros/assets/img/smg_seguros.svg" },
+  { id: 4, companyName: 'Meridional', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSMKPnO1qZ4ozDTBa9G-BKnCKbHkNWlB9KwhA&s" },
 ];
 
 const InsurersScreen = () => {
@@ -20,10 +20,10 @@ const InsurersScreen = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [formData, setFormData] = useState({
-    username: '',
+    userName: '',
     password: '',
     confirmPassword: '',
-    name: '',
+    companyName: '',
   });
   const token = localStorage.getItem('authToken');
 
@@ -33,8 +33,8 @@ const InsurersScreen = () => {
         try {
           const data = await getInsurers(token);
           const mergedInsurers = defaultInsurersData.map(defaultInsurer => {
-            const match = data.find(fetched => fetched.name === defaultInsurer.name);
-            return match ? { ...defaultInsurer, username: match.username } : defaultInsurer;
+            const match = data.find(fetched => fetched.companyName === defaultInsurer.companyName);
+            return match ? { ...defaultInsurer, userName: match.userName } : defaultInsurer;
           });
           setInsurers(mergedInsurers);
         } catch (error) {
@@ -51,13 +51,13 @@ const InsurersScreen = () => {
   }, [token, refreshTrigger]);
 
   const handleCardClick = (insurerClicked) => {
-    const foundInsurer = insurers.find(ins => ins.name === insurerClicked.name);
+    const foundInsurer = insurers.find(ins => ins.companyName === insurerClicked.companyName);
     setSelectedInsurer(foundInsurer || insurerClicked);
     setFormData({
-      username: foundInsurer?.username || '',
+      userName: foundInsurer?.userName || '',
       password: '',
       confirmPassword: '',
-      name: foundInsurer?.name || '',
+      companyName: foundInsurer?.companyName || '',
     });
     setModalOpen(true);
   };
@@ -65,7 +65,7 @@ const InsurersScreen = () => {
   const handleModalClose = () => {
     setModalOpen(false);
     setSelectedInsurer(null);
-    setFormData({ username: '', password: '', confirmPassword: '', name: '' });
+    setFormData({ userName: '', password: '', confirmPassword: '', companyName: '' });
   };
 
   const handleFormChange = (e) => {
@@ -82,28 +82,28 @@ const InsurersScreen = () => {
       return;
     }
 
-    if (selectedInsurer?.username) {
+    if (selectedInsurer?.userName) {
       // Update existing insurer (only username is available from get)
       try {
         const updateData = {};
         if (formData.password) {
           updateData.password = formData.password;
-          updateData.username = formData.username
+          updateData.userName = formData.userName
         }
-        const updatedData = await updateInsurer(selectedInsurer.name, updateData, token);
+        const updatedData = await updateInsurer(selectedInsurer.companyName, updateData, token);
         setInsurers(prevInsurers =>
           prevInsurers.map(insurer =>
-            insurer.name === selectedInsurer.name
+            insurer.companyName === selectedInsurer.companyName
               ? { ...insurer, ...updateData }
               : insurer
           )
         );
-        toast.success(`Se actualizó correctamente la información de ${selectedInsurer.name}`);
+        toast.success(`Se actualizó correctamente la información de ${selectedInsurer.companyName}`);
         handleModalClose();
         console.log('Insurer updated:', updatedData);
       } catch (error) {
         console.error('Error updating insurer:', error);
-        toast.error(`No se pudo actualizar la información de ${selectedInsurer.name}`);
+        toast.error(`No se pudo actualizar la información de ${selectedInsurer.companyName}`);
       }
     } else {
       // Create new insurer
@@ -113,19 +113,19 @@ const InsurersScreen = () => {
       }
       try {
         const newInsurerData = {
-          name: formData.name,
-          username: formData.username,
+          companyName: formData.companyName,
+          userName: formData.userName,
           password: formData.password,
         };
         const createdInsurer = await createInsurer(newInsurerData, token);
         setInsurers(prevInsurers => [...prevInsurers, createdInsurer]);
-        toast.success(`Se agregó correctamente ${formData.name}`);
+        toast.success(`Se agregó correctamente ${formData.companyName}`);
         setRefreshTrigger(prev => prev + 1);
         handleModalClose();
         console.log('Insurer created:', createdInsurer);
       } catch (error) {
         console.error('Error creating insurer:', error);
-        toast.error(`No se pudo agregar ${formData.name}`);
+        toast.error(`No se pudo agregar ${formData.userName}`);
       }
     }
   };
@@ -137,18 +137,18 @@ const InsurersScreen = () => {
     }
 
     try {
-      await deleteInsurer(selectedInsurer.name, token);
+      await deleteInsurer(selectedInsurer.companyName, token);
       const updatedInsurers = insurers.map(insurer =>
-        insurer.name === selectedInsurer.name ? { ...insurer, username: '' } : insurer
+        insurer.companyName === selectedInsurer.companyName ? { ...insurer, userName: '' } : insurer
       );
       setInsurers(updatedInsurers);
-      toast.success(`Se borró la información de usuario de ${selectedInsurer.name}`);
+      toast.success(`Se borró la información de usuario de ${selectedInsurer.companyName}`);
       setRefreshTrigger(prev => prev + 1);
       handleModalClose();
-      console.log('Insurer deleted from backend:', selectedInsurer.name);
+      console.log('Insurer deleted from backend:', selectedInsurer.companyName);
     } catch (error) {
       console.error('Error al eliminar la aseguradora del backend:', error);
-      toast.error(`No se pudo eliminar la información de usuario de ${selectedInsurer.name} `);
+      toast.error(`No se pudo eliminar la información de usuario de ${selectedInsurer.companyName} `);
     }
   };
 
