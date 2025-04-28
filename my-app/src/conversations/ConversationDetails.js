@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { Button, CircularProgress, Dialog, DialogActions, DialogTitle, IconButton, useMediaQuery, TextField, Switch } from '@mui/material';
 import Navbar from '../Home/Navbar';
-import { getConversationDetails, pauseConversation, resumeConversation, replyToConversation, updateConversationMetadata } from '../services/bffService';
+import { getConversationDetails, pauseConversation, resumeConversation, replyToConversation, updateConversationMetadata, sendManualMessage } from '../services/bffService';
 import ConversationHeader from './ConversationHeader';
 import MessageList from './MessageList';
 import DeleteDialog from './DeleteDialog';
@@ -58,14 +58,15 @@ const ConversationDetails = () => {
   }, [id, navigate]);
 
   const handleCopilotModeChange = async (event) => {
+    console.log('handleCopilotModeChange se ejecutó');
     if (!manualMode) return; // Deshabilitar Copilot si no está activado el Modo Manual
     const isCopilot = event.target.checked;
     setCopilotMode(isCopilot);
-
+  
     try {
       const token = localStorage.getItem('authToken');
-      await updateConversationMetadata(id, { copilotEnabled: isCopilot }, token); 
-      
+      await updateConversationMetadata(id, { copilotEnabled: isCopilot }, token);
+  
       if (isCopilot) {
         const conversationDetails = await getConversationDetails(id, token);
         setSuggestedReply(conversationDetails.suggestedReply || ''); // Precargar mensaje de Copilot
@@ -108,7 +109,7 @@ const ConversationDetails = () => {
     if (manualMessage.trim() !== '') {
       try {
         const token = localStorage.getItem('authToken');
-        await replyToConversation(id, { text: manualMessage }, token); 
+        await sendManualMessage(id, manualMessage , token); 
 
         const newMessage = {
           text: manualMessage,

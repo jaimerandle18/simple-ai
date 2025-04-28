@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, useMediaQuery, Button } from '@mui/material';
+import { Box, Typography, useMediaQuery, TextField } from '@mui/material';
 import InsurerCard from './insurersCards';
 import InsurerFormModal from './insurersFormModal';
 import Navbar from '../Home/Navbar';
@@ -8,17 +8,24 @@ import { ToastContainer, toast } from 'react-toastify';
 
 const defaultInsurersData = [
   { id: 1, companyName: 'Galicia', imageUrl: "https://segurocelular.com.ar/wp-content/uploads/2021/10/Galicia-logo-seguro-celu.png" },
-  { id: 2, companyName: 'Sis', imageUrl: "https://media.licdn.com/dms/image/v2/C4E0BAQHO8MVxJ2g5Ug/company-logo_200_200/company-logo_200_200/0/1637947009059/sisperuoficial_logo?e=2147483647&v=beta&t=yKHHFxPSHCnH7hj2sZRceXB777SHNksrujZrQ8eAaOs" },
+  { id: 2, companyName: 'Rus', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR5pOfAbSEl4EomHNPaOIyD9uZgslvWd9VPVA&s" },
   { id: 3, companyName: 'Swiss Medical', imageUrl: "https://www.swissmedical.com.ar/subsitio/swissmedicalseguros/assets/img/smg_seguros.svg" },
   { id: 4, companyName: 'Meridional', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSMKPnO1qZ4ozDTBa9G-BKnCKbHkNWlB9KwhA&s" },
+  { id: 6, companyName: 'Mercantil Andina', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSxlBdNTYX7-jookaFL8yPCA-yQKMHV2zJz6g&s" },
+  { id: 7, companyName: 'San Cristobal', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSVjjvXJPN1ESPcivM8JDOHbKAU3PIoJiX44w&s" },
+  { id: 8, companyName: 'Atm', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTUxRjwE9b0K-gxJ0VCZfzlOwmcoNwZpfMP9w&s" },
+  { id: 9, companyName: 'Federacion Patronal', imageUrl: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRqSslIhUCDvLeXMZMTIvssBaqTH7zd6PUIZw&s" },
+  { id: 10, companyName: 'Integrity', imageUrl: "https://media.licdn.com/dms/image/v2/C4E0BAQFgI5ayrJnWqQ/company-logo_200_200/company-logo_200_200/0/1630606984145/integrity_seguros_logo?e=2147483647&v=beta&t=n-vANhsa5Vh-uxv4gS3BxHWkybTKzVqoqHXeRJB2g3s" },
 ];
 
 const InsurersScreen = () => {
   const isMobile = useMediaQuery('(max-width:600px)');
-  const [insurers, setInsurers] = useState(defaultInsurersData);
+  const [allInsurers, setAllInsurers] = useState(defaultInsurersData);
+  const [filteredInsurers, setFilteredInsurers] = useState(defaultInsurersData);
   const [selectedInsurer, setSelectedInsurer] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [searchText, setSearchText] = useState('');
   const [formData, setFormData] = useState({
     userName: '',
     password: '',
@@ -36,14 +43,17 @@ const InsurersScreen = () => {
             const match = data.find(fetched => fetched.companyName === defaultInsurer.companyName);
             return match ? { ...defaultInsurer, userName: match.userName } : defaultInsurer;
           });
-          setInsurers(mergedInsurers);
+          setAllInsurers(mergedInsurers);
+          setFilteredInsurers(mergedInsurers);
         } catch (error) {
           console.error('Error fetching insurers:', error);
           toast.error('No se pudieron cargar las aseguradoras.');
-          setInsurers(defaultInsurersData);
+          setAllInsurers(defaultInsurersData);
+          setFilteredInsurers(defaultInsurersData);
         }
       } else {
-        setInsurers(defaultInsurersData);
+        setAllInsurers(defaultInsurersData);
+        setFilteredInsurers(defaultInsurersData);
       }
     };
 
@@ -51,7 +61,7 @@ const InsurersScreen = () => {
   }, [token, refreshTrigger]);
 
   const handleCardClick = (insurerClicked) => {
-    const foundInsurer = insurers.find(ins => ins.companyName === insurerClicked.companyName);
+    const foundInsurer = allInsurers.find(ins => ins.companyName === insurerClicked.companyName);
     setSelectedInsurer(foundInsurer || insurerClicked);
     setFormData({
       userName: foundInsurer?.userName || '',
@@ -91,7 +101,14 @@ const InsurersScreen = () => {
           updateData.userName = formData.userName
         }
         const updatedData = await updateInsurer(selectedInsurer.companyName, updateData, token);
-        setInsurers(prevInsurers =>
+        setAllInsurers(prevInsurers =>
+          prevInsurers.map(insurer =>
+            insurer.companyName === selectedInsurer.companyName
+              ? { ...insurer, ...updateData }
+              : insurer
+          )
+        );
+        setFilteredInsurers(prevInsurers =>
           prevInsurers.map(insurer =>
             insurer.companyName === selectedInsurer.companyName
               ? { ...insurer, ...updateData }
@@ -118,7 +135,8 @@ const InsurersScreen = () => {
           password: formData.password,
         };
         const createdInsurer = await createInsurer(newInsurerData, token);
-        setInsurers(prevInsurers => [...prevInsurers, createdInsurer]);
+        setAllInsurers(prevInsurers => [...prevInsurers, createdInsurer]);
+        setFilteredInsurers(prevInsurers => [...prevInsurers, createdInsurer]);
         toast.success(`Se agregó correctamente ${formData.companyName}`);
         setRefreshTrigger(prev => prev + 1);
         handleModalClose();
@@ -138,10 +156,11 @@ const InsurersScreen = () => {
 
     try {
       await deleteInsurer(selectedInsurer.companyName, token);
-      const updatedInsurers = insurers.map(insurer =>
+      const updatedInsurers = allInsurers.map(insurer =>
         insurer.companyName === selectedInsurer.companyName ? { ...insurer, userName: '' } : insurer
       );
-      setInsurers(updatedInsurers);
+      setAllInsurers(updatedInsurers);
+      setFilteredInsurers(updatedInsurers);
       toast.success(`Se borró la información de usuario de ${selectedInsurer.companyName}`);
       setRefreshTrigger(prev => prev + 1);
       handleModalClose();
@@ -152,17 +171,57 @@ const InsurersScreen = () => {
     }
   };
 
+  const handleSearchChange = (e) => {
+    const value = e.target.value.toLowerCase();
+    setSearchText(value);
+    const filtered = allInsurers.filter(insurer =>
+      insurer.companyName.toLowerCase().includes(value)
+    );
+    setFilteredInsurers(filtered);
+  };
+
   return (
     <>
       <Navbar />
-      <Box sx={{ padding: '20px' }}>
+      <Box sx={{
+    padding: '20px',
+    height: 'calc(100vh - 64px)',
+    overflowY: 'auto',
+    margin: 0, // Añade esto
+    paddingBottom: '20px', // Asegúrate de tener un padding inferior para ver el último elemento
+  }}>
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '20px' }}>
           <h1 style={{ fontSize: isMobile ? "25px" : "25px", color: "purple", marginTop: "10px" , display:"flex", justifyContent:"center"}}>
             Aseguradoras
           </h1>
         </Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '20px', marginTop: "30px" }}>
-          {insurers.map((insurer) => (
+        <Box sx={{ marginBottom: '20px', width: isMobile ? '100%' : '50%', marginX: 'auto' }}>
+          <TextField
+            fullWidth
+            label="Buscar por nombre"
+            variant="outlined"
+            value={searchText}
+            onChange={handleSearchChange}
+            InputLabelProps={{
+              style: {
+                color: 'black', // Establece el color del label a negro (cuando no está enfocado)
+              },
+            }}
+            InputProps={{
+              style: {
+                color: 'black', // Establece el color del texto del input
+              },
+            }}
+          />
+        </Box>
+        <Box sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          gap: '20px',
+          marginTop: "30px",
+        }}>
+          {filteredInsurers.map((insurer) => (
             <InsurerCard
               key={insurer.id}
               insurer={insurer}
@@ -170,6 +229,11 @@ const InsurersScreen = () => {
               width={isMobile ? '100%' : '30%'}
             />
           ))}
+          {filteredInsurers.length === 0 && (
+            <Typography sx={{ width: '100%', textAlign: 'center', mt: 2 }}>
+              No se encontraron aseguradoras con el nombre "{searchText}"
+            </Typography>
+          )}
         </Box>
         <InsurerFormModal
           open={modalOpen}

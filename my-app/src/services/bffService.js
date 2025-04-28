@@ -138,34 +138,24 @@ export const resumeConversation = async (id, token) => {
 };
 
 
-export const sendManualMessage = async (conversationId, message) => {
+export const sendManualMessage = async (conversationId, message, token) => {
     try {
-      await fetch(`/conversations/${conversationId}/reply`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: message }),
-      });
-      console.log('Mensaje manual enviado');
+      const response = await apiClient.post(
+        `/conversations/${conversationId}/reply`,
+        { text: message }, // Pasamos el objeto directamente
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+      console.log('Mensaje manual enviado', response.data);
     } catch (error) {
       console.error('Error al enviar mensaje manual:', error);
+      throw error;
     }
   };
-
-  export const replyToConversation = async (id, message, token) => {
-    try {
-        const response = await apiClient.post(`/conversations/${id}/reply`, message, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            }
-        });
-        return response.data;  // Devuelve la respuesta de enviar el mensaje
-    } catch (error) {
-        throw new Error(error.response?.data?.message || 'Error sending manual message');
-    }
-};
 
 export const getChannels = async (token) => {
     try {
@@ -362,7 +352,7 @@ export const postFilesAlert = async (assistantId, token) => {
 };
   
 export const createInsurer = async (insurerData) => {
-    const token = localStorage.getItem('authToken');
+ const token = localStorage.getItem('authToken');
     try {
       const response = await apiClient.post('/insurers', insurerData, {
         headers: {

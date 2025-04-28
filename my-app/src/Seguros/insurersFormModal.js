@@ -23,7 +23,7 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
               {selectedInsurer?.companyName?.charAt(0).toUpperCase()}
             </Avatar>
           )}
-          <Typography variant="h6">{selectedInsurer ? `Editar ${selectedInsurer.companyName}` : `Agregar aseguradora`}</Typography>
+          <Typography variant="h6">{!isCreatingNew ? `Editar ${selectedInsurer?.companyName}` : `Agregar ${selectedInsurer?.companyName}`}</Typography>
         </Box>
         <form onSubmit={onSubmit}>
           {!selectedInsurer && (
