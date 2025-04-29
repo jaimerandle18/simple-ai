@@ -136,6 +136,19 @@ export const resumeConversation = async (id, token) => {
         throw new Error(error.response?.data?.message || 'Error resuming the conversation');
     }
 };
+export const replyToConversation = async (id, message, token) => {
+    try {
+        const response = await apiClient.post(`/conversations/${id}/reply`, message, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            }
+        });
+        return response.data;  // Devuelve la respuesta de enviar el mensaje
+    } catch (error) {
+        throw new Error(error.response?.data?.message || 'Error sending manual message');
+    }
+};
 
 
 export const sendManualMessage = async (conversationId, message, token) => {
