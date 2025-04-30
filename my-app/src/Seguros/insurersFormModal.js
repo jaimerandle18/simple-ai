@@ -14,7 +14,7 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
 
   return (
     <Modal open={open} onClose={onClose}>
-      <Box sx={{ position: 'absolute', top: isEditingWithUsername? "50%": "57%", left: '50%', transform: 'translate(-50%, -50%)', width: 400, bgcolor: 'background.paper', boxShadow: 24, p: 4 }}>
+      <Box sx={{ position: 'absolute', top: isEditingWithUsername ? "50%" : "57%", left: '50%', transform: 'translate(-50%, -50%)', width: 400, bgcolor: 'background.paper', boxShadow: 24, p: 4 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 2 }}>
           {selectedInsurer?.imageUrl ? (
             <Avatar src={selectedInsurer.imageUrl} alt={selectedInsurer.companyName} sx={{ width: 80, height: 80, mb: 1 }} />
@@ -29,7 +29,7 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
           {!selectedInsurer && (
             <TextField
               label="Nombre de la Aseguradora"
-              name="name"
+              name="companyName" // Corregido el name para que coincida con formData
               value={formData.companyName}
               onChange={onChange}
               fullWidth
@@ -40,7 +40,7 @@ const InsurerFormModal = ({ open, onClose, formData, onChange, onSubmit, onDelet
           )}
           <TextField
             label="Email"
-            name="username"
+            name="userName" // Corregido el name para que coincida con formData
             value={formData.userName}
             onChange={onChange}
             fullWidth

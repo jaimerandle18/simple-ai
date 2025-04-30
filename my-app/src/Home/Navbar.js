@@ -10,9 +10,9 @@ import { useNavigate } from 'react-router-dom';
 import SettingsSuggestTwoToneIcon from '@mui/icons-material/SettingsSuggestTwoTone';
 import ReplyAllIcon from '@mui/icons-material/ReplyAll';
 import HomeIcon from '@mui/icons-material/Home';
-import MenuIcon from '@mui/icons-material/Menu'; // Importa el icono de menú
+import MenuIcon from '@mui/icons-material/Menu';
 import SecurityIcon from '@mui/icons-material/Security';
-import './Navbar.css'; // Asegúrate de que este archivo CSS exista y contenga los estilos
+import './Navbar.css';
 
 const Navbar = () => {
     const navigate = useNavigate();
@@ -36,94 +36,82 @@ const Navbar = () => {
     }, []);
 
     return (
-        <div className={isMobile ? "" : "NAVBAR"} style={{ backgroundColor: isMobile ? "white" : "white", position: isMobile ? "fixed" : "", zIndex: "9999", width: isMobile ? "100%" : "", bottom: isMobile ? 0 : "", height: isMobile ? "45px" : "", marginTop: !isMobile ? "0px" : "" }}>
-            <nav className="navbar navbar-expand-lg navbar-light bg-light" style={{ backgroundColor: 'white' }}>
-                <div className="container-fluid">
-                    <div className="navbar-brand" style={{ display: isMobile ? 'none' : 'flex', alignItems: 'center' }}>
-                        <img style={{ height: '30px', width: '30px', marginLeft: '10px', marginTop: '5px' }} src={SimpleLogo} alt="Simple Logo" />
-                        <img style={{ width: isMobile ? "70px" : '130px', marginTop: '10px', marginLeft: '10px', cursor: 'pointer' }} src={simpleAi} alt="Simple AI" onClick={() => navigate("/home")} />
+        <div className={isMobile ? "navbar-mobile-container" : "navbar-desktop-container"}>
+            <nav className="navbar" >
+                <div className="navbar-content">
+                    <div className="navbar-brand-container" style={{ display: isMobile ? 'none' : 'flex' }}>
+                        <img className="logo-simple" src={SimpleLogo} alt="Simple Logo" />
+                        <img className="logo-ai" src={simpleAi} alt="Simple AI" onClick={() => navigate("/home")} />
                     </div>
                     {!isMobile ?
-                        <div style={{ display: 'flex', marginTop: "20px", marginLeft:"-150px" }}>
-                            <PersonIcon style={{ color: "white" }} />
-                            <p style={{ color: "white", marginLeft: "5px" }}>Bienvenido, <strong>{name}</strong>!</p>
+                        <div className="welcome-desktop">
+                            <PersonIcon className="welcome-icon" />
+                            <p className="welcome-text">Bienvenido, <strong>{name}</strong>!</p>
                         </div>
                         : <></>}
                     {!isMobile ?
-                        <div className="ml-auto" style={{ display: 'flex', alignItems: 'center' }}>
-                            <div className="sidebar-toggle" onClick={toggleSidebar} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'white' }}>
-                                <MenuIcon style={{ height: '30px', width: '30px' }} />
-                            </div>
+                        <div className="menu-toggle-desktop" onClick={toggleSidebar}>
+                            <MenuIcon className="menu-icon" />
                         </div>
                         :
-                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', position: "fixed", bottom: "0" }}>
-                            <div style={{ flex: '4', display: 'flex', gap: '25px' }}>
-                                <a className="nav-link user-icon-wrapper" >
-                                    <Tooltip title="Home" >
-                                        <HomeIcon style={{ height: '30px', width: '30px', cursor: "pointer", color: "grey" }} onClick={() => navigate("/Home")} />
-                                    </Tooltip>
-                                </a>
-                                <a className="nav-link user-icon-wrapper">
-                                    <Tooltip title="Config asistant" >
-                                        <SettingsSuggestTwoToneIcon style={{ height: '30px', width: '30px', cursor: "pointer", color: "grey" }} onClick={() => navigate("/ChatTest")} />
-                                    </Tooltip>
-                                </a>
-                                <a className="nav-link user-icon-wrapper">
-                                    <Tooltip title="Perfil">
-                                        <PersonIcon style={{ height: '30px', width: '30px', cursor: "pointer", color: "grey" }} onClick={() => navigate("/Perfil")} />
-                                    </Tooltip>
-                                </a>
-                                <a className="nav-link user-icon-wrapper">
-                                    <Tooltip title="Dashboard">
-                                        <EqualizerIcon style={{ height: '30px', width: '30px', cursor: "pointer", color: "grey" }} onClick={() => navigate("/dashboard")} />
-                                    </Tooltip>
-                                </a>
+                        <div className="navbar-mobile-actions">
+                            <div className="mobile-icons">
+                                <Tooltip title="Home">
+                                    <HomeIcon className="mobile-icon" onClick={() => navigate("/Home")} />
+                                </Tooltip>
+                                <Tooltip title="Configurar asistente">
+                                    <SettingsSuggestTwoToneIcon className="mobile-icon" onClick={() => navigate("/ChatTest")} />
+                                </Tooltip>
+                                <Tooltip title="Perfil">
+                                    <PersonIcon className="mobile-icon" onClick={() => navigate("/Perfil")} />
+                                </Tooltip>
+                                <Tooltip title="Dashboard">
+                                    <EqualizerIcon className="mobile-icon" onClick={() => navigate("/dashboard")} />
+                                </Tooltip>
                             </div>
-                            <div style={{ flex: '1', display: 'flex', alignItems: "center", justifyContent: 'center' }}>
-                                <a className="nav-link user-icon-wrapper">
-                                    <Tooltip title="Cerrar sesión">
-                                        <LogoutIcon style={{ height: '30px', width: '30px', cursor: "pointer", color: "grey" }} onClick={handleLogout} />
-                                    </Tooltip>
-                                </a>
+                            <div className="mobile-logout">
+                                <Tooltip title="Cerrar sesión">
+                                    <LogoutIcon className="mobile-icon" onClick={handleLogout} />
+                                </Tooltip>
                             </div>
                         </div>
                     }
                 </div>
             </nav>
 
+            {!isMobile && isSidebarOpen && <div className="sidebar-overlay open" onClick={toggleSidebar}></div>}
+
             {!isMobile && (
                 <div className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
                     <div className="sidebar-content">
                         <div className="sidebar-header">
-                            <p>Menú</p>
+                            <p className="sidebar-title">Menú</p>
                             <button onClick={toggleSidebar} className="close-sidebar">X</button>
                         </div>
                         <a onClick={() => { navigate("/Home"); setIsSidebarOpen(false); }}>
-                            <HomeIcon /> Home
+                            <HomeIcon className="sidebar-icon" /> <span className="sidebar-link-text">Home</span>
                         </a>
                         <a onClick={() => { navigate("/ChatTest"); setIsSidebarOpen(false); }}>
-                            <SettingsSuggestTwoToneIcon /> Configura tu asistente
+                            <SettingsSuggestTwoToneIcon className="sidebar-icon" /> <span className="sidebar-link-text">Configurar asistente</span>
                         </a>
                         <a onClick={() => { navigate("/Seguros"); setIsSidebarOpen(false); }}>
-                            <SecurityIcon /> Mis Companias de seguros
+                            <SecurityIcon className="sidebar-icon" /> <span className="sidebar-link-text">Mis Companias de seguros</span>
                         </a>
                         <a onClick={() => { navigate("/Perfil"); setIsSidebarOpen(false); }}>
-                            <PersonIcon /> Perfil
+                            <PersonIcon className="sidebar-icon" /> <span className="sidebar-link-text">Perfil</span>
                         </a>
                         <a onClick={() => { navigate("/remarketing"); setIsSidebarOpen(false); }}>
-                            <ReplyAllIcon /> Remarketing
+                            <ReplyAllIcon className="sidebar-icon" /> <span className="sidebar-link-text">Remarketing</span>
                         </a>
                         <a onClick={() => { navigate("/dashboard"); setIsSidebarOpen(false); }}>
-                            <EqualizerIcon /> Dashboard
+                            <EqualizerIcon className="sidebar-icon" /> <span className="sidebar-link-text">Dashboard</span>
                         </a>
                         <a onClick={() => { handleLogout(); setIsSidebarOpen(false); }}>
-                            <LogoutIcon /> Cerrar sesión
+                            <LogoutIcon className="sidebar-icon" /> <span className="sidebar-link-text">Cerrar sesión</span>
                         </a>
                     </div>
                 </div>
             )}
-
-            {!isMobile && isSidebarOpen && <div className="sidebar-overlay" onClick={toggleSidebar}></div>}
         </div>
     );
 };

@@ -142,14 +142,14 @@ const UserStats = () => {
 
   return (
     <>
-    <div className={isMobile?"dashContainer":""} style={{ height:isMobile?'100vh':'100%' , overflowY: 'auto' ,display:"flex",flexDirection:isMobile?"column-reverse":"column"}} >
       <Navbar/> 
+    <div className={isMobile?"dashContainer":""} style={{ height:isMobile?'100vh':'100vh' , overflowY: 'auto' ,display:"flex",flexDirection:isMobile?"column-reverse":"column"}} >
           {
             isMobile?
             <></>
             :
             <>
-            <div className="header-container" style={{marginLeft:"5%", marginTop:"20px"}}>
+            <div className="header-container" style={{marginLeft:"5%", marginTop:"0px"}}>
               <h1 style={{fontSize:"30px", color:"grey", marginTop:"10px"}}>Dashboard de tus productos</h1>
               <Button style={{display:"flex", width:"20%", border:"1px solid #ADB0CD", height:"50px"}}  onClick={()=>{navigate("/home")}}>
               <img src={Listado} alt="" style={{ height:"20px"}}/>
