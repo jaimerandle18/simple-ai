@@ -38,7 +38,7 @@ const Navbar = () => {
     return (
         <div className={isMobile ? "navbar-mobile-container" : "navbar-desktop-container"}>
             <nav className="navbar" >
-                <div className="navbar-content">
+                <div className="navbar-content" style={{display: isMobile ? "" : "flex"}}>
                     <div className="navbar-brand-container" style={{ display: isMobile ? 'none' : 'flex' }}>
                         <img className="logo-simple" src={SimpleLogo} alt="Simple Logo" />
                         <img className="logo-ai" src={simpleAi} alt="Simple AI" onClick={() => navigate("/home")} />
@@ -65,6 +65,9 @@ const Navbar = () => {
                                 <Tooltip title="Perfil">
                                     <PersonIcon className="mobile-icon" onClick={() => navigate("/Perfil")} />
                                 </Tooltip>
+                                <a onClick={() => { navigate("/Seguros"); setIsSidebarOpen(false); }}>
+                            <SecurityIcon className="sidebar-icon" /> 
+                        </a>
                                 <Tooltip title="Dashboard">
                                     <EqualizerIcon className="mobile-icon" onClick={() => navigate("/dashboard")} />
                                 </Tooltip>

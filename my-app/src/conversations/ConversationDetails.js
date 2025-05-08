@@ -207,10 +207,15 @@ const ConversationDetails = () => {
   }
 
   return (
-    <div className={isMobile?"ALL":""} style={{ height: '100%', display:'flex',flexDirection:isMobile?'column-reverse':'column',}}>
+    <div className={isMobile ? "ALL" : ""} style={{ 
+      height: '100vh', // Asegúrate de que ocupe toda la altura de la pantalla
+      display: 'flex',
+      flexDirection: isMobile ? 'column-reverse' : 'column',
+      overflow: 'hidden' // Evita scroll en el contenedor principal
+    }}>
       <Navbar />
-      <div style={{ width:isMobile?"100%":"90%",marginLeft:isMobile?"" :"5%", height:isMobile?"100%":"100%",zIndex:isMobile?"2":""}}>
-        <ConversationContainer canal={canal} style={{ backgroundColor: "white",height:"100%",borderRadius:isMobile?"10px 10px 0px 0px":"",}}>
+      <div style={{ width:isMobile?"100%":"90%",marginLeft:isMobile?"" :"5%",height: isMobile ? "calc(100% - 80px)" : "100%" ,zIndex:isMobile?"2":"",  overflow: 'hidden'}}>
+        <ConversationContainer canal={canal} style={{ backgroundColor: "white",height:"100%",borderRadius:isMobile?"10px 10px 0px 0px":"",overflow: 'hidden'}}>
           <ConversationsTop canal={canal} logoSrc={logoSrc} style={{ backgroundColor: "white" }} />
           <div style={{ border: "0.3px solid #E1C9FF", zIndex: "1111", marginTop: "20px" }}></div>
           {
@@ -223,7 +228,7 @@ const ConversationDetails = () => {
             :
             <></>
           }
-          <div style={{ display: isMobile ? "block" : "flex", backgroundColor: "white" }}>
+          <div style={{ display: isMobile ? "block" : "flex", backgroundColor: "white" , overflow:"auto"}}>
             <ConversationHeader conversation={conversation} id={id} isMobile={isMobile} onStateChange={handleStateChange} canal={canal} logoSrc={logoSrc} />
             <MessageList conversation={conversation} isManual={manualMode} />
           </div>
@@ -296,9 +301,9 @@ const ConversationDetails = () => {
       {isMobile?
         <>
           
-          <div onClick={()=>navigate('/home')} style={{zIndex:"2", margin:"auto",display:"flex",alignItems:"center",marginTop:"19%", gap:"20px",marginBottom:"10%"}}>
-            <img src={Logo}  style={{width:"30%"}}/>
-            <img src={SimpleAI} style={{width:"90%"}}/>
+          <div onClick={()=>navigate('/home')} style={{zIndex:"2", margin:"auto",display:"flex",alignItems:"center",marginTop: isMobile? "5%" :"19%", gap:"20px",marginBottom:isMobile? "5%" :"10%"}}>
+            <img src={Logo}  style={{width:isMobile? "22%" : "30%"}}/>
+            <img src={SimpleAI} style={{width:isMobile? "60%":"90%"}}/>
           </div>
         
         </>

@@ -5,6 +5,10 @@ import InsurerFormModal from './insurersFormModal';
 import Navbar from '../Home/Navbar';
 import { createInsurer, updateInsurer, deleteInsurer, getInsurers } from "../services/bffService";
 import { ToastContainer, toast } from 'react-toastify';
+import SimpleAI from '../assets/SimpleWhiteAI.png';
+import Logo from '../assets/simpleLogo.webp';
+import { useNavigate } from 'react-router-dom';
+import { MobileHeader } from '../components/mobileHeader';
 
 const defaultInsurersData = [
   { id: 1, companyName: 'Galicia', imageUrl: "https://segurocelular.com.ar/wp-content/uploads/2021/10/Galicia-logo-seguro-celu.png" },
@@ -26,6 +30,7 @@ const InsurersScreen = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [searchText, setSearchText] = useState('');
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     userName: '',
     password: '',
@@ -182,6 +187,15 @@ const InsurersScreen = () => {
 
   return (
     <>
+     {isMobile?
+        <>
+          
+    <MobileHeader/>
+        
+        </>
+        :
+        <></>
+      }
       <Navbar />
       <Box sx={{
     padding: '20px',

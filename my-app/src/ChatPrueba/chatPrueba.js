@@ -13,6 +13,7 @@ import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import SimpleAI from '../assets/SimpleWhiteAI.png';
 import Logo from '../assets/simpleLogo.webp';
+import { MobileHeader } from '../components/mobileHeader';
 
 function ChatPrueba() {
   const [messages, setMessages] = useState([]);
@@ -370,14 +371,7 @@ const confirmAssistantChange = async () => {
           </div>
         )}
         {isMobile?
-        <>
-          
-          <div style={{zIndex:"2", margin:"1% auto 1%",display:"flex",alignItems:"center",marginTop:"10%",marginBottom:"10%"}}>
-            <img src={Logo}  style={{width:"20%"}}/>
-            <img src={SimpleAI} style={{width:"90%"}}/>
-          </div>
-        
-        </>
+       <MobileHeader/>
         :
         <></>
       }

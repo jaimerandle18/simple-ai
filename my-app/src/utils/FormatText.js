@@ -2,7 +2,7 @@ export const formatText = (text) => {
     if (!text) return '';
 
     // Limpia texto inicial, elimina saltos de línea duplicados
-    text = text.trim().replace(/[\r\n]+/g, '\n');
+    text = text?.trim().replace(/[\r\n]+/g, '\n');
 
     // Eliminar texto entre los caracteres especiales 【 y 】
     text = text.replace(/【.*?】/g, '');

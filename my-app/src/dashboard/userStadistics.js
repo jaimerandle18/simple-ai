@@ -15,6 +15,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import mercadoLibre from "../assets/meli.png";
 import { Card } from 'react-bootstrap';
 import { Instagram, WhatsApp } from '@mui/icons-material';
+import { MobileHeader } from '../components/mobileHeader';
 
 
 
@@ -283,14 +284,7 @@ const UserStats = () => {
       </Box>
       
       {isMobile?
-        <>
-          
-          <div style={{zIndex:"2", margin:"auto",display:"flex",alignItems:"center",marginTop:"10%", gap:"20px",marginBottom:"10%"}}>
-            <img src={Logo}  style={{width:"30%"}}/>
-            <img src={SimpleAI} style={{width:"90%"}}/>
-          </div>
-      
-        </>
+       <MobileHeader/>
         :
         <></>
       }
