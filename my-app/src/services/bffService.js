@@ -203,7 +203,7 @@ export const getPresignedUrl = async (fileName, type, token, size, clientId) => 
 };
 
 // Subir un archivo usando una URL pre-firmada
-export const uploadFile = async (fileName, fileType, presignedUrl, file) => {
+export const uploadFile = async (fileType, presignedUrl, file) => {
     try {
         const response = await fetch(presignedUrl, {
             method: 'PUT',
@@ -351,18 +351,6 @@ export const deletePeriodicJob = async (id, token) => {
     }
 };
 
-export const postFilesAlert = async (assistantId, token) => {
-    try {
-        const response = await apiClient.post(`/assistants/${assistantId}/upload-files`, {},{
-            headers: {
-                'Authorization': `Bearer ${token}`,
-            },
-        });
-        return response.data;
-    } catch (error) {
-        throw new Error(error.response?.data?.message || 'Error fetching presigned url');
-    }
-};
   
 export const createInsurer = async (insurerData) => {
  const token = localStorage.getItem('authToken');

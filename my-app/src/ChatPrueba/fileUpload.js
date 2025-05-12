@@ -21,8 +21,7 @@ import {
   uploadFile,
   getUserFiles,
   deleteFiles,
-  getPresignedUrl,
-  postFilesAlert,
+  getPresignedUrl
 } from '../services/bffService';
 import {
   ContentCopy as ContentCopyIcon,
@@ -31,6 +30,7 @@ import {
   Description as DescriptionIcon,
 } from '@mui/icons-material';
 import FileUploadInfo from './infoGestor';
+import { FILE_BASE_URL } from '../constants';
 
 const FileUpload = ({ isMobile }) => {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -81,9 +81,7 @@ const FileUpload = ({ isMobile }) => {
             const presignedUrl = presignedUrlResponse.url;
 
             // Subir el archivo usando la URL pre-firmada
-            await uploadFile(file.name?.replaceAll(" ", "-"), getFileExtension(file.type), presignedUrl, token);
-            await postFilesAlert( asistantId[0].id ,token);
-
+            await uploadFile(getFileExtension(file.type), presignedUrl, file);
             setLoading(false);
             loadUploadedFiles();
         } catch (error) {
@@ -99,7 +97,6 @@ const FileUpload = ({ isMobile }) => {
     try {
       if (fileToDelete) {
         await deleteFiles(clientId, token, fileToDelete);
-        await postFilesAlert( asistantId[0].id ,token);
         loadUploadedFiles();
         setOpenDeleteModal(false);
       }
@@ -109,7 +106,7 @@ const FileUpload = ({ isMobile }) => {
   }, [clientId, token, fileToDelete, loadUploadedFiles]);
 
   const handleFileClick = useCallback((file) => {
-    const fileUrl = `https://simple-ai-client-data.s3.amazonaws.com/${clientId}/public/${file}`;
+    const fileUrl = `${FILE_BASE_URL}${clientId}/public/${file}`;
 
     // Extraer el nombre del archivo sin la extensión
     const fileNameWithoutExtension = file;

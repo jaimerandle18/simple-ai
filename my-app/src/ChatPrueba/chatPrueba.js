@@ -14,6 +14,7 @@ import Alert from '@mui/material/Alert';
 import SimpleAI from '../assets/SimpleWhiteAI.png';
 import Logo from '../assets/simpleLogo.webp';
 import { MobileHeader } from '../components/mobileHeader';
+import { POLLING_BASE_URL, WEBHOOK_URL } from '../constants';
 
 function ChatPrueba() {
   const [messages, setMessages] = useState([]);
@@ -199,7 +200,7 @@ const confirmAssistantChange = async () => {
       setMessages((prevMessages) => [...prevMessages, { user: 'CLIENTE', text: input, timestamp: new Date() }]);
 
       try {
-        await fetch('https://7slvz4c3sadkqahhvs2v6mvvua0arqfj.lambda-url.us-east-1.on.aws/6/asdasd123', {
+        await fetch(WEBHOOK_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newMessage),
@@ -217,7 +218,7 @@ const confirmAssistantChange = async () => {
   };
 
   const startPolling = async (eventId) => {
-    const pollingUrl = `https://ye7vfne74zvjc3twxc2h2mtkqq0ezayn.lambda-url.us-east-1.on.aws/${eventId}`;
+    const pollingUrl = `${POLLING_BASE_URL}${eventId}`;
   
     try {
       const response = await fetch(pollingUrl);

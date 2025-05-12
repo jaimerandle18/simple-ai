@@ -1,11 +1,10 @@
 // src/services/apiClient.js
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-
-const BASE_URL = process.env.REACT_APP_API_BASE_URL;
+import { API_BASE_URL } from '../constants';
 
 const apiClient = axios.create({
-    baseURL: BASE_URL,
+    baseURL: API_BASE_URL,
     headers: {
         'Content-Type': 'application/json',
     },
