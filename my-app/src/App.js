@@ -12,6 +12,7 @@ import CampañaScreen from './Remarketing/CampScreen';
 import InsurersScreen from './Seguros/insurersScreen';
 
 const App= () => {
+    
     setupInterceptors(Navigate);
     return (
         <Router>
