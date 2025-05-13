@@ -201,7 +201,13 @@ const ConversationDetails = () => {
                 <Switch checked={manualMode} onChange={handleManualModeChange} />
                 <Typography sx={{ marginLeft: 2 }}>Modo Manual</Typography>
               </Box>
-            ) : null
+            ) :(
+              <Box sx={{ marginTop: 2, display: 'flex', alignItems: 'center' }}>
+                <Typography sx={{ marginRight: 2, marginLeft: 2 }}>Modo IA</Typography>
+                <Switch checked={manualMode} onChange={handleManualModeChange} />
+                <Typography sx={{ marginLeft: 2 }}>Modo Manual</Typography>
+              </Box>
+            ) 
           }
   <div
     style={{
@@ -216,9 +222,10 @@ const ConversationDetails = () => {
     }}
   >
             <ConversationHeader conversation={conversation} id={id} isMobile={isMobile} />
+           
             <MessageList conversation={conversation} isManual={manualMode}/>
           </div>
-
+            
           {manualMode && (
             <Box sx={{
               display: 'flex',

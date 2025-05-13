@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Typography, Avatar, List, ListItem, ListItemIcon, ListItemText, useMediaQuery } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
-import InstagramIcon from '@mui/icons-material/Instagram';
+
 import StoreIcon from '@mui/icons-material/Store';
 import Navbar from '../Home/Navbar';
 import SimpleAI from '../assets/SimpleWhiteAI.png'
@@ -13,6 +13,7 @@ import './userInfo.css'; // Asegúrate de usar esta hoja de estilos
 import WhatsAppQrHandler from './whatsappQrHandler';
 import { getAssistants } from '../services/bffService';
 import Melibre from "../assets/melibre.png"
+import InstagramHandler from './instagramHandelr';
 // Estilo para el contenedor del perfil del usuario
 const UserInfoContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -88,11 +89,8 @@ const UserInfo = () => {
             <WhatsAppQrHandler clientId={user.client_id} assistId={user.assistId} user={user} />
             </ListItem>
             <div className='border'/>
-            <ListItem>
-              <ListItemIcon style={{marginTop:"-20px"}}>
-                <InstagramIcon style={{color:"#8a3ab9"}} />
-              </ListItemIcon>
-              <ListItemText  primary="Instagram" secondary={user.instagram ? "Cuenta activa" : "Cuenta inactiva"} />
+            <ListItem style={{marginTop:'25px', padding:"0px", marginBottom:"10px"}}>
+              <InstagramHandler  clientId={user.client_id} assistId={user.assistId} user={user}/>
             </ListItem>
             <div className='border'/>
             <ListItem>

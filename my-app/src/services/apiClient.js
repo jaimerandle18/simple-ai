@@ -2,7 +2,10 @@
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
-const BASE_URL = 'https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/';
+//fake api https://lzqogg674ftg74ippdjunnhvdy0nbjyr.lambda-url.us-east-1.on.aws/
+//real api https://6wqwjnilkygbweybic5ywpqmse0akwlt.lambda-url.us-east-1.on.aws/
+
+const BASE_URL = 'https://lzqogg674ftg74ippdjunnhvdy0nbjyr.lambda-url.us-east-1.on.aws/';
 
 const apiClient = axios.create({
     baseURL: BASE_URL,
