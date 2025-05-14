@@ -5,14 +5,11 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'; // Flecha hac
 import ArrowDropUpIcon from '@mui/icons-material/ArrowDropUp';
 
 const InstagramHandler = ({ clientId, user }) => {
-  const [qrUrl, setQrUrl] = useState(""); // Para almacenar la URL del QR
-  const [isLoading, setIsLoading] = useState(false); // Para manejar el estado de carga
   const [showInput, setShowInput] = useState(false); // Para mostrar/ocultar el formulario de entrada
-    
+  
   const loginInsta = (event) => {
-    console.log("insta");
-    // Aquí abrimos la URL en una nueva ventana/pestaña, reemplazando {id_del_cliente} por el valor de clientId
-    const authUrl = `https://zgo5ag3batxfe3pclxgsksdfly0jczub.lambda-url.us-east-1.on.aws/init-auth/2?clientId=${clientId}`;
+    const authUrl = `https://zgo5ag3batxfe3pclxgsksdfly0jczub.lambda-url.us-east-1.on.aws/init-auth/2?clientId=${clientId}&redirectUrl=http://localhost:3000/Perfil`;
+   
     window.open(authUrl, '_blank');
   };
     
