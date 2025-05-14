@@ -232,7 +232,7 @@ const ConversationDetails = () => {
             <ConversationHeader conversation={conversation} id={id} isMobile={isMobile} onStateChange={handleStateChange} canal={canal} logoSrc={logoSrc} />
             <MessageList conversation={conversation} isManual={manualMode} />
           </div>
-
+            
           {manualMode && (
             <Box
               sx={{
