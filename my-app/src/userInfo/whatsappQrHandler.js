@@ -88,26 +88,26 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
     }
   };
 
-  const phonesStatus = async () => {
-    try{
-      const response = await  apiClient.get('/isActivatePhone',{
-        headers: {
-          'Authorization':`Bearer ${Token}`
-        }
-      })
-      if(response.status === 200){
-        console.log(response.data.phones)
-        setPhone(response.data.phones)
+  // const phonesStatus = async () => {
+  //   try{
+  //     const response = await  apiClient.get('/isActivatePhone',{
+  //       headers: {
+  //         'Authorization':`Bearer ${Token}`
+  //       }
+  //     })
+  //     if(response.status === 200){
+  //       console.log(response.data.phones)
+  //       setPhone(response.data.phones)
         
-      }
-    }catch(error){
+  //     }
+  //   }catch(error){
 
-    }
-  }
+  //   }
+  // }
 
-  useEffect(() => {
-    console.log("Estado de phone actualizado:", phone);
-  }, [phone]);
+  // useEffect(() => {
+  //   console.log("Estado de phone actualizado:", phone);
+  // }, [phone]);
 
 
   useEffect(() => {
@@ -123,15 +123,15 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
 
 
 
-  useEffect(() => {
-    phonesStatus();
-    const interval = setInterval(() => {
-      phonesStatus();
-      console.log('Verificando estado de teléfonos...');
-    }, 20000);
+  // useEffect(() => {
+  //   phonesStatus();
+  //   const interval = setInterval(() => {
+  //     phonesStatus();
+  //     console.log('Verificando estado de teléfonos...');
+  //   }, 20000);
     
-    return () => {clearInterval(interval);}
-  }, []); 
+  //   return () => {clearInterval(interval);}
+  // }, []); 
 
 
 
@@ -150,8 +150,8 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
     
         {showInput && (
           <Box>
-            {/* Mostrar el input solo si showInput es verdadero */}
-            {phone && phone.length > 0 ? (
+            
+            {/* {phone && phone.length > 0 ? (
               <div>
                 {phone.map((item, index) => (
                   <Typography 
@@ -165,7 +165,7 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
             ) : (
               <Typography>No hay teléfonos registrados</Typography>
             )}
-         
+          */}
 
             <TextField
               helperText="Ingresar el numero sin +954"
