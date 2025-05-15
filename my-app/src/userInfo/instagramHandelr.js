@@ -3,12 +3,12 @@ import { Typography, Button, TextField, ListItem, ListItemIcon, ListItemText, Bo
 import InstagramIcon from '@mui/icons-material/Instagram';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'; // Flecha hacia abajo
 import ArrowDropUpIcon from '@mui/icons-material/ArrowDropUp';
-import { API_BASE_URL } from '../constants';
+
 const InstagramHandler = ({ clientId, user }) => {
   const [showInput, setShowInput] = useState(false); // Para mostrar/ocultar el formulario de entrada
   
   const loginInsta = (event) => {
-    const authUrl = `{${API_BASE_URL}/init-auth/2?clientId=${clientId}&redirectUrl=https://simple-ai-alpha.vercel.app/Perfil`;
+    const authUrl = `https://zgo5ag3batxfe3pclxgsksdfly0jczub.lambda-url.us-east-1.on.aws/init-auth/2?clientId=${clientId}&redirectUrl=https://simple-ai-alpha.vercel.app/Perfil`;
    
     window.open(authUrl, '_blank');
   };
