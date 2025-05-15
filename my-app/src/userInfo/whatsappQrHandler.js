@@ -90,7 +90,7 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
 
   const phonesStatus = async () => {
     try{
-      const response = await  apiClient.get('/isActivatePhone',{
+      const response = await  apiClient.get('/getPhoneStatuses',{
         headers: {
           'Authorization':`Bearer ${Token}`
         }
