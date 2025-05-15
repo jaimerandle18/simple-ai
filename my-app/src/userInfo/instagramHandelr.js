@@ -8,7 +8,7 @@ const InstagramHandler = ({ clientId, user }) => {
   const [showInput, setShowInput] = useState(false); // Para mostrar/ocultar el formulario de entrada
   
   const loginInsta = (event) => {
-    const authUrl = `https://zgo5ag3batxfe3pclxgsksdfly0jczub.lambda-url.us-east-1.on.aws/init-auth/2?clientId=${clientId}&redirectUrl=http://localhost:3000/Perfil`;
+    const authUrl = `https://zgo5ag3batxfe3pclxgsksdfly0jczub.lambda-url.us-east-1.on.aws/init-auth/2?clientId=${clientId}&redirectUrl=https://simple-ai-alpha.vercel.app/Perfil`;
    
     window.open(authUrl, '_blank');
   };
