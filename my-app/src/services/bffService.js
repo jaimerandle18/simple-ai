@@ -281,76 +281,6 @@ export const createPeriodicJob = async (clientId, name, params, token, schedule)
     }
 };
 
-export const getPeriodicJobs = async (clientId, token) => {
-    const baseUrl = process.env.REACT_APP_API_BASE_URL;
-    try {
-        const response = await fetch(`${baseUrl}/periodicjobs?client_id=${clientId}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || 'Error fetching periodic jobs');
-        }
-
-        return await response.json();
-    } catch (error) {
-        throw new Error(error.message || 'Error fetching periodic jobs');
-    }
-};
-
-export const updatePeriodicJob = async (id, campaignData, token ) => {
-    const baseUrl = process.env.REACT_APP_API_BASE_URL;
-    try {
-        const response = await fetch(`${baseUrl}/periodicjobs/${id}`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-            },
-            body: JSON.stringify({ // Construye un objeto con los datos
-                config: campaignData.config,
-                schedule: campaignData.schedule,
-            }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `Error al actualizar la campaña: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        throw new Error(error.message || `Error al actualizar la campaña`);
-    }
-};
-
-export const deletePeriodicJob = async (id, token) => {
-    const baseUrl = process.env.REACT_APP_API_BASE_URL;
-    try {
-        const response = await fetch(`${baseUrl}/periodicjobs/${id}`, {
-            method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `Error al eliminar la campaña: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        throw new Error(error.message || `Error al eliminar la campaña`);
-    }
-};
-
   
 export const createInsurer = async (insurerData) => {
  const token = localStorage.getItem('authToken');
@@ -407,3 +337,42 @@ export const createInsurer = async (insurerData) => {
       throw new Error(error.response?.data?.message || 'Error fetching insurers');
     }
   };
+
+  export const postPeriodicJob = async (token, { prompt, daysWaitingExecution, enabled }) => {
+    try {
+      const response = await apiClient.post(
+        '/remarketing',
+        {
+          prompt,
+          daysWaitingExecution,
+          enabled,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+  
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error posting periodic job');
+    }
+  };
+  
+  export const getPeriodicJobs = async (token) => {
+    try {
+      const response = await apiClient.get('/remarketing', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+  
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.message || 'Error fetching periodic jobs');
+    }
+  };
+  

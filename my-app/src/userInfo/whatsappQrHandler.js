@@ -9,6 +9,7 @@ import ArrowDropUpIcon from '@mui/icons-material/ArrowDropUp';
 const WhatsAppQrHandler = ({ clientId, user }) => {
   const [whatsappNumber, setWhatsappNumber] = useState('');
   const [qrUrl, setQrUrl] = useState(""); // Para almacenar la URL del QR
+  const [phone, setPhone] = useState([]); // Numero de telefono logeado
   const [qrStatus, setQrStatus] = useState(null); // Para almacenar el estado del QR
   const [isLoading, setIsLoading] = useState(false); // Para manejar el estado de carga
   const [isCheckingQr, setIsCheckingQr] = useState(false); // Para manejar el estado de verificación del QR
@@ -67,7 +68,7 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
       headers: {
           'Authorization': `Bearer ${Token}`,
       }
-  });
+  }); 
       
       console.log(response.data)
       if (response.status === 200) {
@@ -87,6 +88,28 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
     }
   };
 
+  const phonesStatus = async () => {
+    try{
+      const response = await  apiClient.get('/getPhoneStatuses',{
+        headers: {
+          'Authorization':`Bearer ${Token}`
+        }
+      })
+      if(response.status === 200){
+        console.log(response.data.phones)
+        setPhone(response.data.phones)
+        
+      }
+    }catch(error){
+
+    }
+  }
+
+  useEffect(() => {
+    console.log("Estado de phone actualizado:", phone);
+  }, [phone]);
+
+
   useEffect(() => {
     // Solo verificar el estado del QR si el número de teléfono está disponible y el QR ha sido generado
     if (qrUrl) {
@@ -94,9 +117,23 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
         handleCheckQrStatus();
       }, 20000); // Verificar cada 20 segundos
 
-      return () => clearInterval(interval); // Limpiar el intervalo cuando el componente se desmonte
+      return () => {clearInterval(interval)}; // Limpiar el intervalo cuando el componente se desmonte
     }
   }, [handleGenerateQr]);
+
+
+
+  useEffect(() => {
+    phonesStatus();
+    const interval = setInterval(() => {
+      phonesStatus();
+      console.log('Verificando estado de teléfonos...');
+    }, 20000);
+    
+    return () => {clearInterval(interval);}
+  }, []); 
+
+
 
   return (
     <ListItem style={{ marginTop: '0px', display: 'inline-block', flexDirection: 'column', alignItems: 'flex-start', width:"80%"}}>
@@ -110,10 +147,26 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
           </IconButton>
           </ListItemIcon>
         </div>
-
-        {/* Mostrar el input solo si showInput es verdadero */}
+    
         {showInput && (
           <Box>
+            {/* Mostrar el input solo si showInput es verdadero */}
+            {phone && phone.length > 0 ? (
+              <div>
+                {phone.map((item, index) => (
+                  <Typography 
+                    key={index} 
+                    color={item.enabled ?(item.isLogin ? 'green' : 'red'):'gray'}
+                  >
+                    {item.phone} 
+                  </Typography>
+                ))}
+              </div>
+            ) : (
+              <Typography>No hay teléfonos registrados</Typography>
+            )}
+         
+
             <TextField
               helperText="Ingresar el numero sin +954"
               FormHelperTextProps={{style: {color: "grey"}}}
@@ -168,6 +221,7 @@ const WhatsAppQrHandler = ({ clientId, user }) => {
             {qrStatus && (
               <Typography variant="body1" style={{ marginTop: '10px' }}>
                 {qrStatus}
+                {phone}
               </Typography>
             )}
           </Box>

@@ -18,7 +18,7 @@ const CampañaScreen = () => {
             <div style={{ height: '100vh', padding: '2%', overflow: "auto" }}>
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <h1 style={{ fontSize:isMobile?"25px":"25px", color: "purple", marginTop: "10px" }}>
-                       Remarketing
+                       Seguimiento
                     </h1>
 
                     <Formulario onCampaignSaved={handleCampaignSaved} />

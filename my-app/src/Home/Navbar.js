@@ -104,7 +104,7 @@ const Navbar = () => {
                             <PersonIcon className="sidebar-icon" /> <span className="sidebar-link-text">Perfil</span>
                         </a>
                         <a onClick={() => { navigate("/remarketing"); setIsSidebarOpen(false); }}>
-                            <ReplyAllIcon className="sidebar-icon" /> <span className="sidebar-link-text">Remarketing</span>
+                            <ReplyAllIcon className="sidebar-icon" /> <span className="sidebar-link-text">Seguimiento</span>
                         </a>
                         <a onClick={() => { navigate("/dashboard"); setIsSidebarOpen(false); }}>
                             <EqualizerIcon className="sidebar-icon" /> <span className="sidebar-link-text">Dashboard</span>
