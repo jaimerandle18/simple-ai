@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Typography, Avatar, List, ListItem, ListItemIcon, ListItemText, useMediaQuery } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
-
+import FacebookHandler from './FacebookHandler';
 import StoreIcon from '@mui/icons-material/Store';
 import Navbar from '../Home/Navbar';
 import SimpleAI from '../assets/SimpleWhiteAI.png'
@@ -91,6 +91,11 @@ const UserInfo = () => {
             <div className='border'/>
             <ListItem style={{marginTop:'25px', padding:"0px", marginBottom:"10px"}}>
               <InstagramHandler  clientId={user.client_id} assistId={user.assistId} user={user}/>
+            </ListItem>
+            <div className='border'/>
+            
+            <ListItem style={{marginTop:'25px', padding:"0px", marginBottom:"10px"}}>
+              <FacebookHandler clientId={user.client_id} assistId={user.assistId} user={user}/>
             </ListItem>
             <div className='border'/>
             <ListItem>
