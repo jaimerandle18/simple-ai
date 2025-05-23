@@ -20,14 +20,13 @@ function ChatPrueba() {
   const [messages, setMessages] = useState([]);
   const [conversations, setConversations] = useState({});
   const [input, setInput] = useState('');
-  const [extraPrompt, setExtraPrompt] = useState('');
   const [dates, setDates] = useState("");
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantName, setAssistantName] = useState('');
   const [assistants, setAssistants] = useState([]);
   const [selectedAssistant, setSelectedAssistant] = useState(null);
-  const [channels, setChannels] = useState([]); 
-  const [channelId, setChannelId] = useState(null); 
+  const [channels, setChannels] = useState([]);
+  const [channelId, setChannelId] = useState(null);
   const [isModified, setIsModified] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [pendingAssistant, setPendingAssistant] = useState(null);
@@ -39,15 +38,15 @@ function ChatPrueba() {
   const [loadingSendPrompt, setLoadingSendPrompt] = useState(false);
   const [source, setSource] = useState("");
   const messagesEndRef = useRef(null);
-  const [openSnack, setOpenSnack] = useState(false); 
-  const [openSnackError, setOpenSnackError] = useState(false); 
+  const [openSnack, setOpenSnack] = useState(false);
+  const [openSnackError, setOpenSnackError] = useState(false);
 
   const generateConversationId = () => {
     return String(Date.now()) + Math.floor(Math.random() * 999999);
   };
 
   useEffect(() => {
-    setSource(generateConversationId()); 
+    setSource(generateConversationId());
   }, []);
 
   useEffect(() => {
@@ -57,17 +56,19 @@ function ChatPrueba() {
   }, [messages]);
 
   const startNewConversation = () => {
-    setConversations((prevConversations) => ({
-      ...prevConversations,
-      [selectedAssistant.id]: [],
-    }));
-    setMessages([]);
-    setSource(generateConversationId());
-    setIsTyping(false);
+    if (selectedAssistant) {
+      setConversations((prevConversations) => ({
+        ...prevConversations,
+        [selectedAssistant.id]: [],
+      }));
+      setMessages([]);
+      setSource(generateConversationId());
+      setIsTyping(false);
+    }
   };
 
   useEffect(() => {
-    const fetchAssistantData = async () => {
+    const fetchInitialData = async () => {
       const token = localStorage.getItem('authToken');
       if (!token) {
         navigate('/');
@@ -76,10 +77,6 @@ function ChatPrueba() {
       try {
         const assistantsData = await getAssistants(token);
         setAssistants(assistantsData);
-        setSelectedAssistant(assistantsData[0]);
-        setAssistantName(assistantsData[0].name);
-        setExtraPrompt(assistantsData[0].config.extraPrompt || '');
-        setAssistantInput(assistantsData[0].config.extraPrompt || '');
 
         const clientInfo = await getUserInfo(token);
         setClientId(clientInfo.client_id);
@@ -87,23 +84,64 @@ function ChatPrueba() {
         const channelsData = await getChannels(token);
         setChannels(channelsData);
 
-        const initialChannel = channelsData.find(channel => channel.assistant_id === assistantsData[0].id && channel.type === 6);
-        if (initialChannel) {
-          setChannelId(initialChannel.id);
+        if (assistantsData.length > 0) {
+          const initialAssistant = assistantsData[0];
+          setSelectedAssistant(initialAssistant);
+          setAssistantInput(initialAssistant.config?.extraPrompt || '');
+          setAssistantName(initialAssistant.name);
+
+          const initialChannel = channelsData.find(channel => channel.assistant_id === initialAssistant.id && channel.type === 6);
+          setChannelId(initialChannel ? initialChannel.id : null);
         }
 
         setLoading(false);
       } catch (error) {
-        console.error("Error fetching data", error);
+        console.error("Error fetching initial data", error);
         setLoading(false);
       }
     };
-    fetchAssistantData();
+    fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    if (!selectedAssistant) {
+      setAssistantInput('');
+      setAssistantName('');
+      setChannelId(null);
+      setIsModified(false);
+    }
+  }, [selectedAssistant, channels]);
+
 
   const handlePromptChange = (e) => {
     setAssistantInput(e.target.value);
     setIsModified(true);
+  };
+
+  const performAssistantChange = (assistantToSelect) => {
+    if (selectedAssistant) {
+      setConversations((prevConversations) => ({
+        ...prevConversations,
+        [selectedAssistant.id]: messages,
+      }));
+    }
+
+    setSelectedAssistant(assistantToSelect);
+    setAssistantInput(assistantToSelect.config?.extraPrompt || '');
+    setAssistantName(assistantToSelect.name);
+    setIsModified(false);
+
+    const newMessages = conversations[assistantToSelect.id] || [];
+    setMessages(newMessages);
+    setSource(generateConversationId());
+    setIsTyping(false);
+
+    const newAssistantChannel = channels.find(channel => channel.assistant_id === assistantToSelect.id && channel.type === 6);
+    if (newAssistantChannel) {
+      setChannelId(newAssistantChannel.id);
+    } else {
+      setChannelId(null);
+    }
   };
 
   const handleAssistantChange = (newAssistant) => {
@@ -111,158 +149,133 @@ function ChatPrueba() {
       setPendingAssistant(newAssistant);
       setShowConfirmation(true);
     } else {
-      setConversations((prevConversations) => ({
-        ...prevConversations,
-        [selectedAssistant.id]: messages,
-      }));
-      const newMessages = conversations[newAssistant.id] || [];
-      setMessages(newMessages);
-      setSelectedAssistant(newAssistant);
-      setAssistantName(newAssistant.name);
-      setExtraPrompt(newAssistant.config.extraPrompt || '');
-      setAssistantInput(newAssistant.config.extraPrompt || '');
-
-      const assistantChannel = channels.find(channel => channel.assistant_id === newAssistant.id && channel.type === 6);
-      if (assistantChannel) {
-        setChannelId(assistantChannel.id);
-      }
-
-      setSource(generateConversationId()); 
-      setIsTyping(false);
+      performAssistantChange(newAssistant);
     }
   };
-const confirmAssistantChange = async () => {
-  if (pendingAssistant) {
-    // Guarda la conversación actual antes de cambiar de asistente
-    setConversations((prevConversations) => ({
-      ...prevConversations,
-      [selectedAssistant.id]: messages,
-    }));
 
-    try {
-      const token = localStorage.getItem('authToken');
+  const confirmAssistantChange = async () => {
+    if (pendingAssistant) {
+      try {
+        const token = localStorage.getItem('authToken');
+        const assistantsData = await getAssistants(token);
+        setAssistants(assistantsData);
 
-      // Obtiene la lista de asistentes actualizada después del cambio
-      const assistantsData = await getAssistants(token);
-      setAssistants(assistantsData);
+        const updatedAssistantRef = assistantsData.find(assistant => assistant.id === pendingAssistant.id);
 
-      // Busca el asistente actualizado en la lista y selecciona el nuevo
-      const updatedAssistant = assistantsData.find(assistant => assistant.id === pendingAssistant.id);
+        if (updatedAssistantRef) {
+            performAssistantChange(updatedAssistantRef);
+        } else {
+            console.error('Error: Pending assistant not found in updated list after confirmation.');
+            setSelectedAssistant(null);
+            setAssistantInput('');
+            setAssistantName('');
+            setChannelId(null);
+            setMessages([]);
+        }
 
-      // Obtiene los canales y selecciona el canal de tipo 6 del nuevo asistente
-      const channels = await getChannels(token);
-      const assistantChannel = channels.find(channel => 
-        channel.assistant_id === pendingAssistant.id && channel.type === 6
-      );
-
-      if (assistantChannel) {
-        setChannelId(assistantChannel.id);
-      } else {
-        console.error('No se encontró un canal de tipo 6 para el asistente seleccionado');
+        setShowConfirmation(false);
+        setPendingAssistant(null);
+      } catch (error) {
+        console.error('Error confirming assistant change or loading data:', error);
+        setShowConfirmation(false);
+        setPendingAssistant(null);
+        setOpenSnackError(true);
       }
-
-      // Actualiza los datos del asistente seleccionado y su conversación
-      setSelectedAssistant(updatedAssistant);
-      setAssistantName(updatedAssistant.name);
-      setExtraPrompt(updatedAssistant.config.extraPrompt || '');
-      setAssistantInput(updatedAssistant.config.extraPrompt || '');
-      const newMessages = conversations[pendingAssistant.id] || [];
-      setMessages(newMessages);
-      setSource(generateConversationId());
-      setIsTyping(false);
-
-      // Limpia el estado de cambio pendiente y cierra el modal
-      setShowConfirmation(false);
-      setPendingAssistant(null);
-      setIsModified(false);
-
-    } catch (error) {
-      console.error('Error al actualizar o cargar el asistente o el canal:', error);
     }
-  }
-};
-
-
+  };
 
   const sendMessage = async () => {
-    if (input.trim() !== '') {
-      const eventId = String(Date.now()) + Math.floor(Math.random() * 999999);
+    if (input.trim() === '' || !selectedAssistant || !channelId) {
+      return;
+    }
+    const eventId = String(Date.now()) + Math.floor(Math.random() * 999999);
 
-      const newMessage = {
-        id: eventId,
-        clientId: clientId,
-        channelId: channelId, 
-        source: source,
-        target: selectedAssistant.name, 
-        text: input,
-      };
+    const newMessage = {
+      id: eventId,
+      clientId: clientId,
+      channelId: channelId,
+      source: source,
+      target: selectedAssistant.name,
+      text: input,
+    };
 
-      setMessages((prevMessages) => [...prevMessages, { user: 'CLIENTE', text: input, timestamp: new Date() }]);
+    setMessages((prevMessages) => [...prevMessages, { user: 'CLIENTE', text: input, timestamp: new Date() }]);
 
-      try {
-        await fetch(WEBHOOK_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newMessage),
-        });
+    try {
+      await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMessage),
+      });
 
-        setInput('');
-
-        setIsTyping(true);
-          
-        setTimeout(() => startPolling(eventId), 10000);
-      } catch (error) {
-        console.error('Error enviando el mensaje:', error);
-      }
+      setInput('');
+      setIsTyping(true);
+      setTimeout(() => startPolling(eventId), 10000);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setIsTyping(false);
     }
   };
 
   const startPolling = async (eventId) => {
     const pollingUrl = `${POLLING_BASE_URL}${eventId}`;
-  
-    try {
-      const response = await fetch(pollingUrl);
-      const result = await response.json();
-  
-      if (result.action === 'SKIP') {
-        console.log('Mensaje combinado con otro, no se muestra.');
-        setIsTyping(false);
-      } else if (result.action === 'WAIT') {
-        setTimeout(() => startPolling(eventId), 1000);
-      } else if (result.action === 'REPLY') {
-        const replyMessages = result?.text
-          ? [{ type: 'textWap', body: result.text }]
-          : result.messages || [];
-  
-        replyMessages.forEach((replyMessage) => {
-          let formattedMessage;
-  
-          if (replyMessage.type === 'textWap') {
-            formattedMessage = replyMessage.body;
-          } else if (replyMessage.type === 'text') {
-            formattedMessage = `<p>${replyMessage.text.body}</p>`;
-          } else if (replyMessage.type === 'image') {
-            formattedMessage = `
-              <div>
-                <img src="${replyMessage.image.link}" alt="${replyMessage.image.caption || 'Imagen'}">
-                ${replyMessage.image.caption ? `<p style="font-weight: bold;">${replyMessage.image.caption}</p>` : ''}
-              </div>`;
-          } else if (replyMessage.type === 'document') {
-            formattedMessage = `<a href="${replyMessage.document.url}" target="_blank">${replyMessage.document.caption || 'Documento'}</a>`;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(pollingUrl);
+        const result = await response.json();
+
+        if (result.action === 'SKIP') {
+          setIsTyping(false);
+        } else if (result.action === 'WAIT') {
+          attempts++;
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 1000);
+          } else {
+            console.warn(`Max polling attempts reached for event ${eventId}.`);
+            setIsTyping(false);
           }
-  
-          setMessages((prevMessages) => [
-            ...prevMessages,
-            { user: selectedAssistant.name, text: formattedMessage, timestamp: new Date() }, 
-          ]);
-        });
-  
+        } else if (result.action === 'REPLY') {
+          const replyMessages = result?.text
+            ? [{ type: 'textWap', body: result.text }]
+            : result.messages || [];
+
+          replyMessages.forEach((replyMessage) => {
+            let formattedMessage = '';
+
+            if (replyMessage.type === 'textWap') {
+              formattedMessage = replyMessage.body;
+            } else if (replyMessage.type === 'text') {
+              formattedMessage = `<p>${replyMessage.text.body}</p>`;
+            } else if (replyMessage.type === 'image') {
+              formattedMessage = `
+                <div>
+                  <img src="${replyMessage.image.link}" alt="${replyMessage.image.caption || 'Imagen'}" style="max-width: 100%; height: auto;">
+                  ${replyMessage.image.caption ? `<p style="font-weight: bold;">${replyMessage.image.caption}</p>` : ''}
+                </div>`;
+            } else if (replyMessage.type === 'document') {
+              formattedMessage = `<a href="${replyMessage.document.url}" target="_blank" rel="noopener noreferrer">${replyMessage.document.caption || 'Document'}</a>`;
+            } else {
+                console.warn("Unknown message type:", replyMessage.type);
+                formattedMessage = `Unknown message type: ${JSON.stringify(replyMessage)}`;
+            }
+
+            setMessages((prevMessages) => [
+              ...prevMessages,
+              { user: selectedAssistant?.name, text: formattedMessage, timestamp: new Date() },
+            ]);
+          });
+
+          setIsTyping(false);
+        }
+      } catch (error) {
+        console.error('Error during polling:', error);
         setIsTyping(false);
       }
-    } catch (error) {
-      console.error('Error durante el polling:', error);
-      setIsTyping(false);
-    }
+    };
+    poll();
   };
 
   const sendPromptToAssistant = async () => {
@@ -270,7 +283,7 @@ const confirmAssistantChange = async () => {
     if (assistantInput.trim() && selectedAssistant) {
         const token = localStorage.getItem('authToken');
         try {
-            const updatedAssistant = {
+            const updatedAssistantData = {
                 ...selectedAssistant,
                 config: {
                     ...selectedAssistant.config,
@@ -278,32 +291,32 @@ const confirmAssistantChange = async () => {
                 },
             };
 
-            // Realiza el PUT para actualizar el prompt sin usar ETag
-            await updateAssistant(selectedAssistant.id, updatedAssistant, token);
+            await updateAssistant(selectedAssistant.id, updatedAssistantData, token);
 
-            // Vuelve a obtener la lista de asistentes para asegurar la sincronización
             const assistantsData = await getAssistants(token);
             setAssistants(assistantsData);
 
-            // Encuentra y sincroniza el asistente actualizado
             const refreshedAssistant = assistantsData.find(assistant => assistant.id === selectedAssistant.id);
-            setSelectedAssistant(refreshedAssistant);
-            setExtraPrompt(refreshedAssistant.config.extraPrompt || '');
-            setAssistantInput(refreshedAssistant.config.extraPrompt || '');
 
-            setOpenSnack(true);
+            if (refreshedAssistant) {
+                setSelectedAssistant(refreshedAssistant);
+                setAssistantInput(refreshedAssistant.config?.extraPrompt || '');
+                setAssistantName(refreshedAssistant.name);
+            } else {
+                console.warn("Updated assistant not found in refreshed list. Possible inconsistency.");
+            }
+
             setIsModified(false);
+            setOpenSnack(true);
         } catch (error) {
-            console.error('Error actualizando el asistente:', error);
+            console.error('Error updating assistant:', error);
             setOpenSnackError(true);
         } finally {
             setLoadingSendPrompt(false);
         }
     }
-};
+  };
 
-  
-  
   return (
       <div className={isMobile?'asistContainer':""} style={{ height: '100vh', overflowY: 'auto', display:isMobile?"flex":"",flexDirection:isMobile?"column-reverse":"none"}}>
         <Navbar />
@@ -314,7 +327,6 @@ const confirmAssistantChange = async () => {
         ) : (
           <div className="playground-container" style={{zIndex:isMobile?"1":"", width:isMobile?"100%":"",borderRadius:isMobile?"10px 10px 0px 0px":""}}>
             <Header
-              
               assistants={assistants}
               selectedAssistant={selectedAssistant}
               onAssistantChange={handleAssistantChange}
@@ -322,27 +334,28 @@ const confirmAssistantChange = async () => {
               navigate={navigate}
               startNewConversation={startNewConversation}
             />
-            <div style={{ display: 'flex', width:isMobile? '90%':'100%', justifyContent: 'space-between',flexDirection:isMobile?"column":"",height:isMobile?"60%":"70%" }}>
+            <div style={{ display: 'flex', width:isMobile? '90%':'100%', justifyContent: 'space-between',flexDirection:isMobile?"column":"",height:isMobile?"60%":"70%"}}>
                 <div style={{flex:isMobile?"1":"2",display:'flex'}}>
-                <ChatBox 
-                  messages={messages} 
-                  input={input} 
-                  setInput={setInput} 
-                  onSend={sendMessage} 
-                  isTyping={isTyping} 
-                  assistantName={assistantName} 
+                <ChatBox
+                  messages={messages}
+                  input={input}
+                  setInput={setInput}
+                  onSend={sendMessage}
+                  isTyping={isTyping}
+                  assistantName={assistantName}
                   messagesEndRef={messagesEndRef}
                 />
                 </div>
 
                 <div style={{flex:"1",display:"flex"}}>
                 <AssistantBox
+                    key={selectedAssistant?.id || 'no-assistant'}
                     assistantInput={assistantInput}
                     onPromptChange={handlePromptChange}
                     onSend={sendPromptToAssistant}
                     loading={loadingSendPrompt}
                   />
-      
+
                 </div>
             </div>
             <ConfirmationDialog
