@@ -1,0 +1,28 @@
+{
+  "name": "simple-ai",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*",
+    "infra"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "dev:web": "turbo run dev --filter=web",
+    "build:web": "turbo run build --filter=web",
+    "deploy:dev": "cd infra && npx cdk deploy --context env=dev",
+    "deploy:prod": "cd infra && npx cdk deploy --context env=prod"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.0"
+  },
+  "packageManager": "npm@10.8.0",
+  "dependencies": {
+    "@mendable/firecrawl-js": "^4.21.0"
+  }
+}
