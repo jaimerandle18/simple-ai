@@ -1,212 +1,362 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
-import { crawlWebsite, findRelevantProducts } from '../lib/search';
-import { classifyIntent, extractKeywords, smartProductMatch, buildFinalPrompt, DEFAULT_MINI_PROMPTS } from '../lib/agent-pipeline';
-import OpenAI from 'openai';
+import { crawlWebsite, scrapePage } from '../lib/search';
+import Anthropic from '@anthropic-ai/sdk';
+import Fuse from 'fuse.js';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const PRODUCT_INTENTS = ['product_search', 'product_detail', 'price_concern', 'recommendation', 'sizing_help', 'purchase_intent'];
+// ============================================================
+// BÚSQUEDA (mismo Fuse.js que el message-processor)
+// ============================================================
+function searchCatalog(query: string, catalog: any[], categoria?: string): any[] {
+  let pool = catalog;
+  if (categoria) {
+    const catNorm = categoria.toLowerCase();
+    const filtered = pool.filter((p: any) =>
+      (p.category || '').toLowerCase().includes(catNorm) ||
+      (p.categoryNormalized || '').toLowerCase().includes(catNorm)
+    );
+    if (filtered.length > 0) pool = filtered;
+  }
 
+  const fuse = new Fuse(pool, {
+    keys: [
+      { name: 'name', weight: 0.4 },
+      { name: 'category', weight: 0.2 },
+      { name: 'brand', weight: 0.1 },
+      { name: 'description', weight: 0.15 },
+      { name: 'searchableText', weight: 0.15 },
+    ],
+    threshold: 0.45,
+    ignoreLocation: true,
+    includeScore: true,
+  });
+
+  const results = fuse.search(query);
+  if (results.length > 0) return results.slice(0, 6).map(r => r.item);
+
+  const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const terms = normalize(query).split(/\s+/).filter(t => t.length >= 3);
+  if (terms.length === 0) return [];
+
+  return pool
+    .map((p: any) => {
+      const text = normalize(`${p.name} ${p.category || ''} ${p.brand || ''} ${p.description || ''}`);
+      let score = 0;
+      for (const t of terms) { if (text.includes(t)) score += 10; }
+      return { ...p, _score: score };
+    })
+    .filter((x: any) => x._score > 0)
+    .sort((a: any, b: any) => b._score - a._score)
+    .slice(0, 6);
+}
+
+function formatProductsYAML(products: any[]): string {
+  if (products.length === 0) return '(ninguno en contexto, usá buscar_productos)';
+  let block = '';
+  for (const [i, p] of products.entries()) {
+    block += `- id: ${i + 1}\n  nombre: "${p.name}"\n  marca: "${p.brand || 'N/A'}"\n  categoria: "${p.category || 'N/A'}"\n  precio: ${p.priceNum || 'null'}\n  precio_display: "${p.price || 'Consultar'}"`;
+    if (p.sizes && p.sizes.length > 0) block += `\n  talles_disponibles: [${p.sizes.join(', ')}]`;
+    if (p.description) block += `\n  descripcion: "${p.description.slice(0, 120).replace(/"/g, "'")}"`;
+    block += '\n\n';
+  }
+  return block;
+}
+
+const TOOLS: Anthropic.Tool[] = [{
+  name: 'buscar_productos',
+  description: 'Busca productos en el catálogo del negocio por nombre, categoría o uso.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      query: { type: 'string', description: 'Texto para buscar' },
+      categoria: { type: 'string', description: 'Filtrar por categoría' },
+    },
+    required: ['query'],
+  },
+}];
+
+function isTrivialMessage(msg: string): boolean {
+  return [
+    /^(hola|holaa+|hi|hey|buenas|que\s*tal)\s*[!.?]*$/i,
+    /^(gracias|grax)\s*[!.?]*$/i,
+    /^(ok|dale|perfecto|genial)\s*[!.?]*$/i,
+    /^(chau|bye)\s*[!.?]*$/i,
+    /^.{1,3}$/,
+  ].some(p => p.test(msg.trim()));
+}
+
+function isFollowUp(msg: string, hasRecent: boolean): boolean {
+  if (!hasRecent) return false;
+  return [
+    /^y\s+(en|de|el|la|las|los)\s+/i,
+    /^cu[áa]l/i,
+    /^(la|el|las|los)\s+(m[áa]s|menos)\s+/i,
+    /^(que|qu[eé])\s+(talle|color|medida)/i,
+    /^en\s+(talle|color)/i,
+    /en\s+talle\s+(XS|S|M|L|XL|XXL|\d{2})/i,
+    /la\s+tenes\s*\??$/i, /lo\s+tenes\s*\??$/i,
+    /^(cuanto|cu[áa]nto)\s+(sale|cuesta)/i,
+    /^me\s+(llevo|quedo)/i, /^(lo|la)\s+quiero/i,
+  ].some(p => p.test(msg.trim()));
+}
+
+// ============================================================
+// HANDLER
+// ============================================================
 export async function handleAgents(event: APIGatewayProxyEventV2) {
   const path = event.requestContext.http.path;
   const method = event.requestContext.http.method;
   const tenantId = event.headers['x-tenant-id'];
-
   if (!tenantId) return error('x-tenant-id header required', 401);
 
-  // GET /agents/:type
   const agentMatch = path.match(/^\/agents\/([^/]+)$/);
+
+  // GET /agents/:type
   if (method === 'GET' && agentMatch) {
-    const agentType = agentMatch[1];
-    const agent = await getItem(keys.agent(tenantId, agentType));
-    if (!agent) return json({ agentConfig: {} });
-    return json(agent);
+    const agent = await getItem(keys.agent(tenantId, agentMatch[1]));
+    return json(agent || { agentConfig: {} });
   }
 
   // PUT /agents/:type
   if (method === 'PUT' && agentMatch) {
-    const agentType = agentMatch[1];
     const body = JSON.parse(event.body || '{}');
-    const existing = await getItem(keys.agent(tenantId, agentType)) || {};
-
+    const existing = await getItem(keys.agent(tenantId, agentMatch[1])) || {};
     const agent = {
-      ...keys.agent(tenantId, agentType),
-      tenantId,
-      agentType,
+      ...keys.agent(tenantId, agentMatch[1]),
+      tenantId, agentType: agentMatch[1],
       agentConfig: body.agentConfig || existing.agentConfig || {},
-      model: body.model || existing.model || 'gpt-4o-mini',
       active: body.active ?? existing.active ?? true,
       updatedAt: new Date().toISOString(),
     };
-
     await putItem(agent);
     return json(agent);
   }
 
-  // POST /agents/test-chat — pipeline: classify → search → respond
+  // ============================================================
+  // POST /agents/test-chat — MISMO PIPELINE QUE WHATSAPP
+  // ============================================================
   if (method === 'POST' && path === '/agents/test-chat') {
     const body = JSON.parse(event.body || '{}');
-    const { message, history } = body;
-
+    const { message, history, recentProductNames } = body;
     if (!message) return error('message is required');
 
     const agent = await getItem(keys.agent(tenantId, 'main'));
-    const config = agent?.agentConfig || {};
-    const model = agent?.model || 'gpt-4o-mini';
+    const agentCfg = agent?.agentConfig || {};
+    const catalog = (await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 500 }))
+      .filter((p: any) => p.name && p.name.length > 2);
 
     const historyMsgs = (history || []) as { role: string; content: string }[];
 
+    // Rebuild recent products from names
+    const recentProducts: any[] = [];
+    if (recentProductNames?.length > 0) {
+      for (const name of recentProductNames) {
+        const found = catalog.find((p: any) => p.name === name);
+        if (found) recentProducts.push(found);
+      }
+    }
+
+    const trivial = isTrivialMessage(message);
+    const followUpMsg = isFollowUp(message, recentProducts.length > 0);
+    const newProducts = (trivial || followUpMsg) ? [] : searchCatalog(message, catalog);
+
+    const dedup = (arr: any[]) => {
+      const seen = new Set<string>();
+      return arr.filter((p: any) => { const k = (p.productId || p.name).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    };
+
+    const contextOnly = dedup(recentProducts).slice(0, 6);
+    const freshOnly = dedup(newProducts).slice(0, 4);
+    const allContext = dedup([...contextOnly, ...freshOnly]);
+
+    const catCounts: Record<string, number> = {};
+    for (const p of catalog) { if ((p as any).category) catCounts[(p as any).category] = (catCounts[(p as any).category] || 0) + 1; }
+    const categories = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(', ');
+
+    const name = agentCfg.assistantName || 'el vendedor';
+    const web = agentCfg.websiteUrl || '';
+
+    const systemPrompt = `Sos ${name}, vendedor virtual por WhatsApp de un comercio argentino.${web ? ` Web: ${web}` : ''}
+
+# TONO
+Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
+
+# REGLAS
+1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.
+2. NUNCA digas "no tengo eso cargado" si hay productos en contexto.
+3. NUNCA cierres con "¿algo más?". Pregunta específica.
+4. Precio formateado: $XX.XXX
+5. Las fotos se envían AUTOMÁTICAMENTE de los productos que nombrás con datos concretos.
+6. USO DE buscar_productos: solo si el cliente pide categoría/producto NUEVO.
+7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES.
+8. Si el cliente quiere comprar, pedile los datos.
+9. Si insulta o pide humano: "Te paso con alguien del equipo."
+
+# CATEGORÍAS
+${categories}
+${agentCfg.promotions ? `\n# PROMOCIONES\n${agentCfg.promotions}` : ''}
+${agentCfg.extraInstructions ? `\n# REGLAS DEL NEGOCIO\n${agentCfg.extraInstructions}` : ''}
+${agentCfg.businessHours ? `\n# HORARIO\n${agentCfg.businessHours}` : ''}
+${agentCfg.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA\n${agentCfg.welcomeMessage}` : ''}
+
+# PRODUCTOS_DISPONIBLES
+${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto)'}`;
+
+    // Build messages
+    const msgs: Anthropic.MessageParam[] = [];
+    for (const m of historyMsgs) {
+      const role = m.role === 'assistant' ? 'assistant' : 'user';
+      if (msgs.length > 0 && msgs[msgs.length - 1].role === role) {
+        msgs[msgs.length - 1].content += '\n' + m.content;
+      } else {
+        msgs.push({ role, content: m.content });
+      }
+    }
+    if (msgs.length > 0 && msgs[0].role === 'assistant') msgs.shift();
+    if (msgs.length === 0 || msgs[msgs.length - 1].role !== 'user') {
+      msgs.push({ role: 'user', content: message });
+    }
+
     try {
-      // ===== STEP 1: Classify intent =====
-      const intent = await classifyIntent(message, historyMsgs, openai);
+      let allShown = [...allContext];
+      let fresh = [...freshOnly];
 
-      // ===== STEP 2: Search products (only if needed) =====
-      let productsContext: string | undefined;
+      for (let round = 0; round < 3; round++) {
+        const res = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6', max_tokens: 500,
+          system: systemPrompt, tools: TOOLS, messages: msgs,
+        });
 
-      if (PRODUCT_INTENTS.includes(intent)) {
-        const allProducts = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 500 });
+        if (res.stop_reason === 'end_turn') {
+          const textBlock = res.content.find(b => b.type === 'text');
+          const reply = textBlock ? textBlock.text : 'Disculpá, tuve un problema.';
 
-        if (allProducts.length > 0) {
-          // Step A: Extract keywords and search
-          const keywords = await extractKeywords(message, historyMsgs, openai);
-          console.log(`Keywords: ${JSON.stringify(keywords)}`);
+          // Images: only fresh products mentioned by name
+          const images: { url: string; caption: string; name: string }[] = [];
+          const replyLower = reply.toLowerCase();
+          const recentNorm = new Set(recentProducts.map((p: any) => p.name.toLowerCase().trim()));
+          const stopW = new Set(['para','con','sin','remera','musculosa','campera','pantalon','oversize','underwave','hoodie','buzo','short','camisa']);
 
-          let relevant = findRelevantProducts(allProducts, keywords);
-          console.log(`Keyword search found ${relevant.length} products`);
-
-          // Step B: If keyword search found nothing, use AI fallback
-          if (relevant.length === 0) {
-            console.log('Keyword search empty, using smart match fallback...');
-            const indices = await smartProductMatch(message, allProducts as any[], openai);
-            console.log(`Smart match indices: ${JSON.stringify(indices)}`);
-            relevant = indices
-              .filter(i => i >= 0 && i < allProducts.length)
-              .map(i => allProducts[i]);
+          for (const p of fresh) {
+            if (!p.imageUrl || !p.imageUrl.startsWith('http')) continue;
+            if (recentNorm.has(p.name.toLowerCase().trim())) continue;
+            const nameWords = p.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3 && !stopW.has(w));
+            if (nameWords.some((w: string) => replyLower.includes(w))) {
+              images.push({ url: p.imageUrl, caption: `*${p.name}*\n${p.brand ? `${p.brand} | ` : ''}${p.price || ''}`, name: p.name });
+            }
           }
 
-          console.log(`Final products: ${relevant.map((p: any) => p.name).join(', ')}`);
-
-          if (relevant.length > 0) {
-            productsContext = relevant.map((p: any) =>
-              `- **${p.name}**${p.price ? ` — ${p.price}` : ''}${p.description ? `\n  ${p.description}` : ''}${p.pageUrl ? `\n  Link: ${p.pageUrl}` : ''}`
-            ).join('\n');
-          } else {
-            const categories = [...new Set(allProducts.map((p: any) => p.category).filter(Boolean))];
-            productsContext = `No se encontraron productos para esta búsqueda.\nCategorías disponibles: ${categories.join(', ') || 'General'}\nTotal de productos en catálogo: ${allProducts.length}`;
-          }
+          return json({ reply, images: images.slice(0, 3), productNames: allShown.map((p: any) => p.name) });
         }
+
+        if (res.stop_reason === 'tool_use') {
+          msgs.push({ role: 'assistant', content: res.content });
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const tu of res.content.filter(b => b.type === 'tool_use')) {
+            if (tu.type !== 'tool_use') continue;
+            const input = tu.input as { query: string; categoria?: string };
+            const found = searchCatalog(input.query, catalog, input.categoria);
+            allShown = [...allShown, ...found];
+            fresh = [...fresh, ...found];
+            toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: found.length > 0 ? formatProductsYAML(found) : `No encontré para "${input.query}". Categorías: ${categories}` });
+          }
+          msgs.push({ role: 'user', content: toolResults });
+          continue;
+        }
+
+        return json({ reply: 'Error', images: [], productNames: [] });
       }
-
-      // ===== STEP 3: Get mini-prompt for this intent =====
-      // TODO: In future, load custom mini-prompts from DynamoDB per tenant
-      const miniPrompt = DEFAULT_MINI_PROMPTS[intent] || DEFAULT_MINI_PROMPTS.general_question;
-
-      // ===== STEP 4: Generate response =====
-      const systemPrompt = buildFinalPrompt(config, intent, miniPrompt, productsContext);
-
-      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
-        ...historyMsgs.map(m => ({
-          role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-          content: m.content,
-        })),
-      ];
-
-      // Only add the current message if it's not already the last in history
-      const lastHistoryMsg = historyMsgs[historyMsgs.length - 1];
-      if (!lastHistoryMsg || lastHistoryMsg.content !== message) {
-        messages.push({ role: 'user', content: message });
-      }
-
-      const completion = await openai.chat.completions.create({
-        model,
-        temperature: 0.7,
-        max_tokens: 600,
-        messages,
-      });
-
-      const reply = completion.choices[0]?.message?.content || 'No pude generar una respuesta.';
-      return json({ reply, intent });
+      return json({ reply: 'Error procesando', images: [], productNames: [] });
     } catch (err: any) {
-      console.error('Pipeline error:', err);
+      console.error('test-chat error:', err);
       return error('Error: ' + err.message, 500);
     }
   }
 
-  // POST /agents/scrape
+  // ============================================================
+  // POST /agents/scrape — CRAWL COMPLETO + ENRIQUECIMIENTO
+  // ============================================================
   if (method === 'POST' && path === '/agents/scrape') {
     const body = JSON.parse(event.body || '{}');
     const { url } = body;
-
     if (!url) return error('url is required');
 
     try {
       const pages = await crawlWebsite(url);
-      console.log(`Crawled ${pages.length} pages from ${url}`);
-
       if (pages.length === 0) {
-        return error('No se pudieron obtener páginas del sitio.', 400);
+        const main = await scrapePage(url);
+        if (main) pages.push(main);
       }
+      if (pages.length === 0) return error('No se pudieron obtener páginas.', 400);
 
       // Delete old products
-      const oldProducts = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1000 });
-      for (const old of oldProducts) {
-        await putItem({ ...(old as any), PK: 'DELETED', SK: (old as any).SK });
-      }
+      const old = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1000 });
+      for (const o of old) await putItem({ ...(o as any), PK: 'DELETED', SK: (o as any).SK });
 
       const allProducts: any[] = [];
+      let businessInfo = '';
       const now = new Date().toISOString();
-      const validPages = pages.filter(p => p.content && p.content.length > 50);
 
-      for (let i = 0; i < validPages.length; i += 5) {
-        const batch = validPages.slice(i, i + 5);
-        const results = await Promise.allSettled(
-          batch.map(async (page) => {
-            const extraction = await openai.chat.completions.create({
-              model: 'gpt-4o-mini',
-              temperature: 0,
-              max_tokens: 4000,
-              messages: [
-                {
-                  role: 'system',
-                  content: `Extraé TODOS los productos/servicios de este contenido. JSON array con: {"name","description" (detallada: materiales, talles, colores),"price","category","imageUrl" (URL de imagen si hay)}.
-Si no hay productos, devolvé []. SOLO JSON.`,
-                },
-                { role: 'user', content: page.content.slice(0, 8000) },
-              ],
-            });
+      for (let i = 0; i < pages.length; i += 3) {
+        const batch = pages.slice(i, i + 3).filter(p => p.content.length > 50);
+        const results = await Promise.allSettled(batch.map(async (page) => {
+          const res = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 4000,
+            system: `Extraé TODOS los productos de este contenido web argentino.
+Para cada producto: {"name","description" (materiales, talles, colores, specs),"price" (exacto),"category","imageUrl","brand"}
+También extraé info del negocio: envíos, cambios, devoluciones, pagos, horarios, dirección.
+JSON: {"products":[...],"businessInfo":"..."}`,
+            messages: [{ role: 'user', content: page.content.slice(0, 10000) }],
+          });
+          const text = res.content[0].type === 'text' ? res.content[0].text : '{}';
+          try {
+            const parsed = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+            return { products: parsed.products || [], businessInfo: parsed.businessInfo || '', pageUrl: page.url };
+          } catch {
+            const m = text.match(/\[[\s\S]*\]/);
+            return { products: m ? JSON.parse(m[0]) : [], businessInfo: '', pageUrl: page.url };
+          }
+        }));
 
-            const text = extraction.choices[0]?.message?.content || '[]';
-            let products: any[] = [];
-            try { products = JSON.parse(text); } catch {
-              const match = text.match(/\[[\s\S]*\]/);
-              if (match) products = JSON.parse(match[0]);
-            }
-            return { products, pageUrl: page.url };
-          })
-        );
-
-        for (const result of results) {
-          if (result.status !== 'fulfilled') continue;
-          for (const product of result.value.products) {
-            if (!product.name) continue;
+        for (const r of results) {
+          if (r.status !== 'fulfilled') continue;
+          if (r.value.businessInfo) businessInfo += r.value.businessInfo + '\n';
+          for (const product of r.value.products) {
+            if (!product.name || product.name.length < 3) continue;
+            if (allProducts.some(p => p.name.toLowerCase() === product.name.toLowerCase())) continue;
             const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+            const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : product.price || 0;
+            const st = [product.name, product.category, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
             await putItem({
               PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
-              tenantId, productId,
-              name: product.name, description: product.description || '',
-              price: product.price || '', category: product.category || '',
-              imageUrl: product.imageUrl || '', pageUrl: result.value.pageUrl,
-              sourceUrl: url, createdAt: now,
+              tenantId, productId, name: product.name, description: product.description || '',
+              price: product.price || 'Consultar', priceNum, category: product.category || '',
+              brand: product.brand || '', imageUrl: product.imageUrl || '', pageUrl: r.value.pageUrl,
+              sourceUrl: url, attributes: {}, searchableText: st,
+              categoryNormalized: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
+              categoryParent: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
+              createdAt: now,
             });
             allProducts.push({ name: product.name, price: product.price, category: product.category, imageUrl: product.imageUrl });
           }
         }
       }
 
-      return json({ productsCount: allProducts.length, pagesScanned: pages.length, products: allProducts.slice(0, 20) });
+      if (businessInfo.trim()) {
+        const existing = await getItem(keys.agent(tenantId, 'main'));
+        if (existing) {
+          const cfg = existing.agentConfig || {};
+          if (!cfg.extraInstructions || cfg.extraInstructions.length < businessInfo.length) {
+            cfg.extraInstructions = businessInfo.slice(0, 2000);
+          }
+          await putItem({ ...existing, agentConfig: cfg, updatedAt: now });
+        }
+      }
+
+      return json({ productsCount: allProducts.length, pagesScanned: pages.length, products: allProducts.slice(0, 30), businessInfo: businessInfo.slice(0, 500) });
     } catch (err: any) {
       return error('Error: ' + err.message, 500);
     }

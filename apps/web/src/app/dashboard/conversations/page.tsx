@@ -10,6 +10,7 @@ interface Conversation {
   contactName?: string;
   status: string;
   tags: string[];
+  assignedTo: string;
   lastMessageAt: string;
   lastMessagePreview?: string;
   unreadCount: number;
@@ -36,6 +37,9 @@ export default function ConversationsPage() {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
+  const [tagInput, setTagInput] = useState('');
+  const [filterTag, setFilterTag] = useState('');
+  const [allTags, setAllTags] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -73,6 +77,64 @@ export default function ConversationsPage() {
     return () => clearInterval(interval);
   }, [selectedConv, tenantId]);
 
+  // Cargar tags disponibles
+  useEffect(() => {
+    if (!tenantId) return;
+    api('/conversations/tags', { tenantId }).then(setAllTags).catch(console.error);
+  }, [tenantId]);
+
+  const addTag = async (tag: string) => {
+    if (!selectedConv || !tenantId || !tag.trim()) return;
+    const newTags = [...(selectedConv.tags || []), tag.trim().toLowerCase()];
+    const uniqueTags = [...new Set(newTags)];
+    try {
+      await api(`/conversations/${selectedConv.conversationId}`, {
+        method: 'PATCH', tenantId, body: { tags: uniqueTags },
+      });
+      setSelectedConv({ ...selectedConv, tags: uniqueTags });
+      setConversations(prev => prev.map(c =>
+        c.conversationId === selectedConv.conversationId ? { ...c, tags: uniqueTags } : c
+      ));
+      if (!allTags.includes(tag.trim().toLowerCase())) {
+        setAllTags(prev => [...prev, tag.trim().toLowerCase()].sort());
+      }
+    } catch (err) { console.error(err); }
+  };
+
+  const removeTag = async (tag: string) => {
+    if (!selectedConv || !tenantId) return;
+    const newTags = (selectedConv.tags || []).filter(t => t !== tag);
+    try {
+      await api(`/conversations/${selectedConv.conversationId}`, {
+        method: 'PATCH', tenantId, body: { tags: newTags },
+      });
+      setSelectedConv({ ...selectedConv, tags: newTags });
+      setConversations(prev => prev.map(c =>
+        c.conversationId === selectedConv.conversationId ? { ...c, tags: newTags } : c
+      ));
+    } catch (err) { console.error(err); }
+  };
+
+  const toggleAssignment = async () => {
+    if (!selectedConv || !tenantId) return;
+    const newAssignment = selectedConv.assignedTo === 'bot' ? 'user' : 'bot';
+    try {
+      await api(`/conversations/${selectedConv.conversationId}`, {
+        method: 'PATCH',
+        tenantId,
+        body: { assignedTo: newAssignment },
+      });
+      setSelectedConv({ ...selectedConv, assignedTo: newAssignment });
+      setConversations(prev => prev.map(c =>
+        c.conversationId === selectedConv.conversationId
+          ? { ...c, assignedTo: newAssignment }
+          : c
+      ));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -109,10 +171,24 @@ export default function ConversationsPage() {
       <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Conversaciones</h2>
-          <p className="text-xs text-gray-500 mt-0.5">{conversations.length} conversaciones</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-xs text-gray-500">{conversations.length} conversaciones</p>
+            {allTags.length > 0 && (
+              <select
+                value={filterTag}
+                onChange={(e) => setFilterTag(e.target.value)}
+                className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5 text-gray-600"
+              >
+                <option value="">Todos los tags</option>
+                {allTags.map(tag => (
+                  <option key={tag} value={tag}>{tag}</option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {conversations.map((conv) => (
+          {conversations.filter(c => !filterTag || (c.tags || []).includes(filterTag)).map((conv) => (
             <button
               key={conv.conversationId}
               onClick={() => setSelectedConv(conv)}
@@ -133,12 +209,19 @@ export default function ConversationsPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-0.5">
-                  <p className="text-xs text-gray-500 truncate">{conv.lastMessagePreview || 'Sin mensajes'}</p>
-                  {conv.unreadCount > 0 && (
-                    <span className="bg-primary-600 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
-                      {conv.unreadCount}
-                    </span>
-                  )}
+                  <p className="text-xs text-gray-500 truncate flex-1">{conv.lastMessagePreview || 'Sin mensajes'}</p>
+                  <div className="flex items-center gap-1 ml-1">
+                    {conv.assignedTo === 'bot' ? (
+                      <span className="w-2 h-2 bg-emerald-400 rounded-full" title="Automático" />
+                    ) : (
+                      <span className="w-2 h-2 bg-amber-400 rounded-full" title="Manual" />
+                    )}
+                    {conv.unreadCount > 0 && (
+                      <span className="bg-primary-600 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                        {conv.unreadCount}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </button>
@@ -170,17 +253,55 @@ export default function ConversationsPage() {
                 </p>
                 <p className="text-xs text-gray-500">{selectedConv.contactPhone}</p>
               </div>
-              <div className="ml-auto flex items-center gap-2">
+              <div className="ml-auto flex items-center gap-2 flex-wrap">
                 {selectedConv.tags?.map((tag) => (
-                  <span key={tag} className="bg-primary-50 text-primary-600 text-xs px-2 py-0.5 rounded-full">
-                    {tag}
-                  </span>
+                  <button
+                    key={tag}
+                    onClick={() => removeTag(tag)}
+                    className="bg-primary-50 text-primary-600 text-xs px-2 py-0.5 rounded-full hover:bg-red-50 hover:text-red-600 transition-colors"
+                    title="Click para quitar"
+                  >
+                    {tag} x
+                  </button>
                 ))}
+                <form onSubmit={(e) => { e.preventDefault(); if (tagInput.trim()) { addTag(tagInput); setTagInput(''); } }} className="inline-flex">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    placeholder="+ tag"
+                    className="w-16 text-xs bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5 focus:outline-none focus:border-primary-400 focus:w-24 transition-all"
+                  />
+                </form>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${
                   selectedConv.status === 'open' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'
                 }`}>
                   {selectedConv.status === 'open' ? 'Abierta' : 'Cerrada'}
                 </span>
+                <button
+                  onClick={toggleAssignment}
+                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors ${
+                    selectedConv.assignedTo === 'bot'
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  }`}
+                >
+                  {selectedConv.assignedTo === 'bot' ? (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                      </svg>
+                      Automático
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0" />
+                      </svg>
+                      Manual
+                    </>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -201,7 +322,7 @@ export default function ConversationsPage() {
                         : 'bg-white border border-gray-200 text-gray-900 rounded-bl-md shadow-sm'
                     }`}>
                       {msg.sender === 'bot' && msg.direction === 'outbound' && (
-                        <p className="text-[10px] opacity-70 mb-1">Bot IA</p>
+                        <p className="text-[10px] opacity-70 mb-1">Agente IA</p>
                       )}
                       <p>{msg.content}</p>
                       <p className={`text-[10px] mt-1 text-right ${

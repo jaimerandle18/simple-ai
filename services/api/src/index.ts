@@ -8,6 +8,7 @@ import { handleContacts } from './routes/contacts';
 import { handleTest } from './routes/test';
 import { handleFiles } from './routes/files';
 import { handleMetrics } from './routes/metrics';
+import { handleChannels } from './routes/channels';
 
 export const handler = async (
   event: APIGatewayProxyEventV2
@@ -26,6 +27,7 @@ export const handler = async (
     if (path.startsWith('/tenants')) return handleTenants(event);
     if (path.startsWith('/conversations')) return handleConversations(event);
     if (path.startsWith('/agents')) return handleAgents(event);
+    if (path.startsWith('/channels')) return handleChannels(event);
     if (path.startsWith('/contacts')) return handleContacts(event);
     if (path.startsWith('/metrics')) return handleMetrics(event);
     if (path.startsWith('/files')) return handleFiles(event);

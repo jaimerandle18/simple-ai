@@ -1,6 +1,7 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
+import { sendWhatsAppMessage } from '../lib/whatsapp-client';
 
 export async function handleConversations(event: APIGatewayProxyEventV2) {
   const path = event.requestContext.http.path;
@@ -8,6 +9,16 @@ export async function handleConversations(event: APIGatewayProxyEventV2) {
   const tenantId = event.headers['x-tenant-id'];
 
   if (!tenantId) return error('x-tenant-id header required', 401);
+
+  // GET /conversations/tags — listar tags en uso
+  if (method === 'GET' && path === '/conversations/tags') {
+    const conversations: any[] = await queryItems(`TENANT#${tenantId}`, 'CONV#', { limit: 500 });
+    const tagSet = new Set<string>();
+    for (const conv of conversations) {
+      for (const tag of conv.tags || []) tagSet.add(tag);
+    }
+    return json([...tagSet].sort());
+  }
 
   // GET /conversations — list conversations for tenant
   if (method === 'GET' && path === '/conversations') {
@@ -48,6 +59,27 @@ export async function handleConversations(event: APIGatewayProxyEventV2) {
     const now = new Date().toISOString();
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+    let waMessageId: string | undefined;
+
+    // Si la conversación tiene canal de WhatsApp, enviar por WA
+    if (conv.channelPhoneNumberId) {
+      try {
+        const channel = await getItem(keys.channel(tenantId, conv.channelPhoneNumberId as string));
+        if (channel?.accessToken && channel?.active) {
+          const waResult = await sendWhatsAppMessage(
+            conv.channelPhoneNumberId as string,
+            channel.accessToken as string,
+            conv.contactPhone as string,
+            content,
+          );
+          waMessageId = waResult.messageId;
+        }
+      } catch (err: any) {
+        console.error('WhatsApp send error:', err.message);
+        // Seguimos guardando el mensaje aunque falle el envío por WA
+      }
+    }
+
     const message = {
       PK: `CONV#${convId}`,
       SK: `MSG#${now}#${msgId}`,
@@ -58,13 +90,14 @@ export async function handleConversations(event: APIGatewayProxyEventV2) {
       sender: 'user',
       type: 'text',
       content,
+      waMessageId,
       timestamp: now,
-      status: 'sent',
+      status: waMessageId ? 'sent' : 'pending',
     };
 
     await putItem(message);
 
-    // Update conversation
+    // Update conversation (no cambia assignedTo — lo controla el toggle)
     await putItem({
       ...conv,
       lastMessageAt: now,

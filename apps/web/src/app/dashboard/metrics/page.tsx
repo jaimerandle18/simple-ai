@@ -12,6 +12,14 @@ interface Metrics {
   messagesToday: number;
   messagesThisWeek: number;
   contactsTotal: number;
+  newContactsWeek: number;
+  botMessages: number;
+  humanMessages: number;
+  inboundMessages: number;
+  botAssigned: number;
+  humanAssigned: number;
+  avgResponseTime: number;
+  tagCounts: Record<string, number>;
 }
 
 export default function MetricsPage() {
@@ -36,63 +44,126 @@ export default function MetricsPage() {
     );
   }
 
+  const m = metrics;
+  const tagEntries = Object.entries(m?.tagCounts || {}).sort((a, b) => b[1] - a[1]);
+  const totalOutbound = (m?.botMessages || 0) + (m?.humanMessages || 0);
+
   return (
     <div className="p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Métricas</h1>
-        <p className="text-gray-500 text-sm mt-1">Estadísticas de tus conversaciones y agente</p>
+        <p className="text-gray-500 text-sm mt-1">Estadísticas de tus conversaciones y agente IA</p>
       </div>
 
-      {/* Main stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Conversaciones hoy" value={metrics?.conversationsToday ?? 0} icon={<ChatIcon />} />
-        <StatCard label="Mensajes hoy" value={metrics?.messagesToday ?? 0} icon={<MessageIcon />} />
-        <StatCard label="Conversaciones abiertas" value={metrics?.openConversations ?? 0} icon={<OpenIcon />} />
-        <StatCard label="Contactos totales" value={metrics?.contactsTotal ?? 0} icon={<ContactIcon />} />
+      {/* Fila 1: Stats principales */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Conversaciones hoy" value={m?.conversationsToday ?? 0} color="primary" />
+        <StatCard label="Mensajes hoy" value={m?.messagesToday ?? 0} color="secondary" />
+        <StatCard label="Contactos nuevos (semana)" value={m?.newContactsWeek ?? 0} color="emerald" />
+        <StatCard
+          label="Tiempo respuesta promedio"
+          value={m?.avgResponseTime ?? 0}
+          suffix="s"
+          color="amber"
+        />
       </div>
 
-      {/* Weekly summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      {/* Fila 2: Semana + totales */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <MiniCard label="Conv. esta semana" value={m?.conversationsThisWeek ?? 0} />
+        <MiniCard label="Mensajes semana" value={m?.messagesThisWeek ?? 0} />
+        <MiniCard label="Conv. abiertas" value={m?.openConversations ?? 0} />
+        <MiniCard label="Contactos total" value={m?.contactsTotal ?? 0} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Agente IA vs Manual */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <p className="text-sm text-gray-500 mb-1">Conversaciones esta semana</p>
-          <p className="text-3xl font-bold text-gray-900">{metrics?.conversationsThisWeek ?? 0}</p>
+          <h2 className="text-base font-semibold text-gray-900 mb-4">Agente IA vs Manual</h2>
+          <div className="space-y-3">
+            <BarRow
+              label="Agente IA"
+              value={m?.botAssigned ?? 0}
+              total={(m?.botAssigned ?? 0) + (m?.humanAssigned ?? 0)}
+              color="bg-emerald-500"
+            />
+            <BarRow
+              label="Manual"
+              value={m?.humanAssigned ?? 0}
+              total={(m?.botAssigned ?? 0) + (m?.humanAssigned ?? 0)}
+              color="bg-amber-500"
+            />
+          </div>
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Mensajes enviados hoy</h3>
+            <div className="space-y-2">
+              <BarRow label="Agente IA" value={m?.botMessages ?? 0} total={totalOutbound} color="bg-emerald-500" />
+              <BarRow label="Humano" value={m?.humanMessages ?? 0} total={totalOutbound} color="bg-amber-500" />
+              <BarRow label="Clientes (entrantes)" value={m?.inboundMessages ?? 0} total={(m?.inboundMessages ?? 0) + totalOutbound} color="bg-gray-400" />
+            </div>
+          </div>
         </div>
+
+        {/* Tags */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <p className="text-sm text-gray-500 mb-1">Mensajes esta semana</p>
-          <p className="text-3xl font-bold text-gray-900">{metrics?.messagesThisWeek ?? 0}</p>
-        </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <p className="text-sm text-gray-500 mb-1">Conversaciones totales</p>
-          <p className="text-3xl font-bold text-gray-900">{metrics?.conversationsTotal ?? 0}</p>
+          <h2 className="text-base font-semibold text-gray-900 mb-4">Tags</h2>
+          {tagEntries.length === 0 ? (
+            <p className="text-sm text-gray-400">Sin tags todavía. Se asignan automáticamente o desde las conversaciones.</p>
+          ) : (
+            <div className="space-y-2">
+              {tagEntries.map(([tag, count]) => (
+                <div key={tag} className="flex items-center justify-between">
+                  <span className="bg-primary-50 text-primary-700 text-xs font-medium px-2.5 py-1 rounded-full">
+                    {tag}
+                  </span>
+                  <span className="text-sm text-gray-500">{count} conversaciones</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, icon }: { label: string; value: number; icon: React.ReactNode }) {
+function StatCard({ label, value, suffix, color }: { label: string; value: number; suffix?: string; color: string }) {
+  const colorMap: Record<string, string> = {
+    primary: 'bg-primary-50 text-primary-600',
+    secondary: 'bg-secondary-50 text-secondary-600',
+    emerald: 'bg-emerald-50 text-emerald-600',
+    amber: 'bg-amber-50 text-amber-600',
+  };
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-      <div className="flex items-center justify-between mb-3">
-        <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center text-primary-500">
-          {icon}
-        </div>
-      </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      <p className="text-sm text-gray-500 mt-1">{label}</p>
+      <p className="text-sm text-gray-500 mb-2">{label}</p>
+      <p className="text-3xl font-bold text-gray-900">
+        {value}{suffix && <span className="text-lg text-gray-400 ml-0.5">{suffix}</span>}
+      </p>
     </div>
   );
 }
 
-function ChatIcon() {
-  return <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" /></svg>;
+function MiniCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="text-xl font-bold text-gray-900 mt-1">{value}</p>
+    </div>
+  );
 }
-function MessageIcon() {
-  return <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" /></svg>;
-}
-function OpenIcon() {
-  return <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z" /></svg>;
-}
-function ContactIcon() {
-  return <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" /></svg>;
+
+function BarRow({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm mb-1">
+        <span className="text-gray-700">{label}</span>
+        <span className="text-gray-500">{value} ({pct}%)</span>
+      </div>
+      <div className="w-full bg-gray-100 rounded-full h-2">
+        <div className={`${color} h-2 rounded-full transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
 }

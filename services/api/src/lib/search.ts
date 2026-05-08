@@ -3,8 +3,109 @@ const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
 const GOOGLE_CX = process.env.GOOGLE_SEARCH_CX;
 
 /**
+ * Google Custom Search: find product pages on a given site.
+ * Returns up to `maxResults` URLs.
+ */
+export async function googleSearchSite(siteUrl: string, maxResults = 30): Promise<string[]> {
+  if (!GOOGLE_API_KEY || !GOOGLE_CX) {
+    console.warn('Google Search API keys not configured, falling back to crawl');
+    return [];
+  }
+
+  const domain = new URL(siteUrl).hostname;
+  const urls: string[] = [];
+
+  // Google Custom Search returns max 10 per request, paginate up to maxResults
+  for (let start = 1; urls.length < maxResults; start += 10) {
+    const params = new URLSearchParams({
+      key: GOOGLE_API_KEY,
+      cx: GOOGLE_CX,
+      q: `site:${domain} productos OR products OR tienda OR shop OR precio OR price`,
+      start: String(start),
+      num: '10',
+    });
+
+    const res = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
+    const data: any = await res.json();
+
+    if (!data.items || data.items.length === 0) break;
+
+    for (const item of data.items) {
+      if (item.link) urls.push(item.link);
+    }
+
+    // No more pages
+    if (!data.queries?.nextPage) break;
+  }
+
+  console.log(`Google Search found ${urls.length} URLs for ${domain}`);
+  return urls.slice(0, maxResults);
+}
+
+/**
+ * Scrape a single URL with Firecrawl. Returns the page as markdown.
+ */
+export async function scrapePage(url: string): Promise<{ url: string; content: string } | null> {
+  if (!FIRECRAWL_API_KEY) return null;
+
+  try {
+    const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${FIRECRAWL_API_KEY}`,
+      },
+      body: JSON.stringify({ url, formats: ['markdown'] }),
+    });
+    const data: any = await res.json();
+
+    if (!data.success) {
+      console.error(`Scrape failed for ${url}:`, data);
+      return null;
+    }
+
+    return { url, content: data.data?.markdown || '' };
+  } catch (err) {
+    console.error(`Scrape error for ${url}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Main scraping pipeline: Google Search finds pages, Firecrawl scrapes them.
+ * Falls back to full crawl if Google Search is not configured.
+ */
+export async function scrapeProducts(siteUrl: string): Promise<{ url: string; content: string }[]> {
+  // Step 1: Try Google Search to find product pages
+  const googleUrls = await googleSearchSite(siteUrl);
+
+  if (googleUrls.length > 0) {
+    // Step 2: Scrape each URL with Firecrawl (batches of 5)
+    const pages: { url: string; content: string }[] = [];
+
+    for (let i = 0; i < googleUrls.length; i += 5) {
+      const batch = googleUrls.slice(i, i + 5);
+      const results = await Promise.allSettled(batch.map(url => scrapePage(url)));
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value && result.value.content.length > 50) {
+          pages.push(result.value);
+        }
+      }
+    }
+
+    console.log(`Scraped ${pages.length} pages via Google Search + Firecrawl`);
+    return pages;
+  }
+
+  // Fallback: crawl the entire site
+  console.log('Falling back to full site crawl');
+  return crawlWebsite(siteUrl);
+}
+
+/**
  * Crawl an entire website with Firecrawl. Returns all pages as markdown.
- * This is meant to run once when the user configures their agent.
+ * Used as fallback when Google Search is not configured.
  */
 export async function crawlWebsite(url: string): Promise<{ url: string; content: string }[]> {
   if (!FIRECRAWL_API_KEY) return [];
@@ -24,7 +125,7 @@ export async function crawlWebsite(url: string): Promise<{ url: string; content:
         scrapeOptions: { formats: ['markdown'] },
       }),
     });
-    const startData = await startRes.json();
+    const startData: any = await startRes.json();
 
     if (!startData.success || !startData.id) {
       console.error('Crawl start failed:', startData);
@@ -41,7 +142,7 @@ export async function crawlWebsite(url: string): Promise<{ url: string; content:
       const statusRes = await fetch(`https://api.firecrawl.dev/v1/crawl/${crawlId}`, {
         headers: { 'Authorization': `Bearer ${FIRECRAWL_API_KEY}` },
       });
-      const statusData = await statusRes.json();
+      const statusData: any = await statusRes.json();
 
       console.log(`Crawl status: ${statusData.status}, pages: ${statusData.data?.length || 0}`);
 

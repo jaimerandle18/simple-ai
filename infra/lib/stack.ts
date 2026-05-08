@@ -63,7 +63,7 @@ export class SimpleAiStack extends cdk.Stack {
     // ========== SQS ==========
     const incomingMessagesQueue = new sqs.Queue(this, 'IncomingMessagesQueue', {
       queueName: `simple-ai-incoming-messages-${stage}`,
-      visibilityTimeout: cdk.Duration.seconds(60),
+      visibilityTimeout: cdk.Duration.seconds(120),
     });
 
     // ========== Lambdas ==========
@@ -77,6 +77,7 @@ export class SimpleAiStack extends cdk.Stack {
         BUCKET_NAME: bucket.bucketName,
         INCOMING_MESSAGES_QUEUE_URL: incomingMessagesQueue.queueUrl,
         OPENAI_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/openai:SecretString:apiKey}}`,
+        ANTHROPIC_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/anthropic:SecretString:apiKey}}`,
         GOOGLE_SEARCH_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/google-search:SecretString:apiKey}}`,
         GOOGLE_SEARCH_CX: `{{resolve:secretsmanager:simple-ai/${stage}/google-search:SecretString:cx}}`,
         FIRECRAWL_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/firecrawl:SecretString:apiKey}}`,
@@ -119,10 +120,10 @@ export class SimpleAiStack extends cdk.Stack {
       environment: {
         TABLE_NAME: table.tableName,
         BUCKET_NAME: bucket.bucketName,
-        OPENAI_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/openai:SecretString:apiKey}}`,
+        ANTHROPIC_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/anthropic:SecretString:apiKey}}`,
         STAGE: stage,
       },
-      timeout: cdk.Duration.seconds(60),
+      timeout: cdk.Duration.seconds(90),
       memorySize: 512,
     });
 

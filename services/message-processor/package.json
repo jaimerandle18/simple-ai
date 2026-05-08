@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:@aws-sdk/*",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
-    "openai": "^4.55.0",
-    "@shared/types": "*"
+    "@shared/types": "*",
+    "fuse.js": "^7.3.0",
+    "openai": "^4.55.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.140",

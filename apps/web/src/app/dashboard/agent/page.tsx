@@ -4,6 +4,14 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
 
+interface AttachedFile {
+  fileKey: string;
+  extractedKey: string;
+  fileName: string;
+  textLength: number;
+  uploadedAt: string;
+}
+
 interface AgentConfig {
   assistantName: string;
   tone: string;
@@ -14,6 +22,7 @@ interface AgentConfig {
   websiteUrl: string;
   websiteScraped: boolean;
   productsCount: number;
+  attachedFiles?: AttachedFile[];
 }
 
 const toneOptions = [
@@ -43,6 +52,8 @@ export default function AgentPage() {
   const [loading, setLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
   const [scrapeResult, setScrapeResult] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState('');
 
   useEffect(() => {
     if (!tenantId) return;
@@ -94,6 +105,77 @@ export default function AgentPage() {
       setScrapeResult('Error al scrapear: ' + err.message);
     }
     setScraping(false);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !tenantId) return;
+
+    const allowed = ['application/pdf', 'text/plain', 'text/csv', 'text/markdown'];
+    if (!allowed.includes(file.type) && !file.name.endsWith('.txt') && !file.name.endsWith('.md') && !file.name.endsWith('.csv')) {
+      setUploadMsg('Solo se permiten archivos PDF, TXT, CSV o MD');
+      return;
+    }
+
+    setUploading(true);
+    setUploadMsg('');
+    try {
+      // 1. Pedir presigned URL
+      const { uploadUrl, fileKey, fileName } = await api('/files/upload-url', {
+        method: 'POST',
+        tenantId,
+        body: { fileName: file.name, contentType: file.type },
+      });
+
+      // 2. Subir a S3
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+
+      // 3. Procesar (extraer texto y asociar al agente)
+      const result = await api('/files/process', {
+        method: 'POST',
+        tenantId,
+        body: { fileKey, fileName },
+      });
+
+      // 4. Actualizar estado local
+      const newFile: AttachedFile = {
+        fileKey,
+        extractedKey: result.extractedKey,
+        fileName,
+        textLength: result.textLength,
+        uploadedAt: new Date().toISOString(),
+      };
+      setConfig(prev => ({
+        ...prev,
+        attachedFiles: [...(prev.attachedFiles || []), newFile],
+      }));
+      setUploadMsg(`"${fileName}" procesado (${Math.round(result.textLength / 1000)}k caracteres extraídos)`);
+    } catch (err: any) {
+      setUploadMsg('Error: ' + err.message);
+    }
+    setUploading(false);
+    e.target.value = '';
+  };
+
+  const handleFileDelete = async (fileKey: string) => {
+    if (!tenantId) return;
+    try {
+      await api('/files/detach', {
+        method: 'DELETE',
+        tenantId,
+        body: { fileKey },
+      });
+      setConfig(prev => ({
+        ...prev,
+        attachedFiles: (prev.attachedFiles || []).filter(f => f.fileKey !== fileKey),
+      }));
+    } catch (err: any) {
+      console.error('Error eliminando archivo:', err);
+    }
   };
 
   if (loading) {
@@ -154,7 +236,7 @@ export default function AgentPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Mensaje de bienvenida</label>
-              <p className="text-xs text-gray-400 mb-1">El primer mensaje que envía el bot cuando un cliente nuevo escribe.</p>
+              <p className="text-xs text-gray-400 mb-1">El primer mensaje que envía el agente cuando un cliente nuevo escribe.</p>
               <textarea
                 value={config.welcomeMessage}
                 onChange={(e) => setConfig({ ...config, welcomeMessage: e.target.value })}
@@ -173,7 +255,7 @@ export default function AgentPage() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Promociones activas</label>
-              <p className="text-xs text-gray-400 mb-1">El bot las mencionará cuando sea relevante.</p>
+              <p className="text-xs text-gray-400 mb-1">El agente las mencionará cuando sea relevante.</p>
               <textarea
                 value={config.promotions}
                 onChange={(e) => setConfig({ ...config, promotions: e.target.value })}
@@ -196,7 +278,7 @@ export default function AgentPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Instrucciones adicionales</label>
-              <p className="text-xs text-gray-400 mb-1">Reglas o información extra que el bot debe saber.</p>
+              <p className="text-xs text-gray-400 mb-1">Reglas o información extra que el agente debe saber.</p>
               <textarea
                 value={config.extraInstructions}
                 onChange={(e) => setConfig({ ...config, extraInstructions: e.target.value })}
@@ -212,7 +294,7 @@ export default function AgentPage() {
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           <h2 className="text-base font-semibold text-gray-900 mb-2">Productos y servicios</h2>
           <p className="text-xs text-gray-500 mb-4">
-            Ingresá la URL de tu web y nosotros extraemos los productos automáticamente. El bot los usa como referencia cuando un cliente pregunta.
+            Ingresá la URL de tu web y nosotros extraemos los productos automáticamente. El agente los usa como referencia cuando un cliente pregunta.
           </p>
 
           <div className="flex gap-3">
@@ -231,7 +313,7 @@ export default function AgentPage() {
               {scraping ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Escaneando...
+                  Escaneando {config.websiteUrl}...
                 </>
               ) : (
                 'Escanear web'
@@ -250,6 +332,74 @@ export default function AgentPage() {
 
           {scrapeResult && !config.websiteScraped && (
             <p className="mt-3 text-sm text-red-600">{scrapeResult}</p>
+          )}
+        </div>
+
+        {/* Archivos de referencia */}
+        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold text-gray-900 mb-2">Archivos de referencia</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            Subí archivos con info de tu negocio (FAQ, políticas, catálogos). El agente los usa para responder mejor.
+          </p>
+
+          {/* Lista de archivos */}
+          {(config.attachedFiles || []).length > 0 && (
+            <div className="space-y-2 mb-4">
+              {(config.attachedFiles || []).map((file) => (
+                <div key={file.fileKey} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{file.fileName}</p>
+                      <p className="text-xs text-gray-400">{Math.round(file.textLength / 1000)}k caracteres extraídos</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleFileDelete(file.fileKey)}
+                    className="text-red-400 hover:text-red-600 p-1"
+                    title="Eliminar archivo"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Upload button */}
+          <label className={`inline-flex items-center gap-2 border border-gray-300 text-gray-700 text-sm font-medium py-2 px-4 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+            {uploading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                Procesando...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                </svg>
+                Subir archivo
+              </>
+            )}
+            <input
+              type="file"
+              accept=".pdf,.txt,.csv,.md"
+              onChange={handleFileUpload}
+              className="hidden"
+              disabled={uploading}
+            />
+          </label>
+
+          <p className="text-xs text-gray-400 mt-2">Formatos: PDF, TXT, CSV, MD</p>
+
+          {uploadMsg && (
+            <p className={`mt-2 text-sm ${uploadMsg.startsWith('Error') ? 'text-red-600' : 'text-emerald-600'}`}>
+              {uploadMsg}
+            </p>
           )}
         </div>
 
