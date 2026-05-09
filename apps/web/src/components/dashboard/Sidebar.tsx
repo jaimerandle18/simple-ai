@@ -10,20 +10,36 @@ const navItems = [
   { href: '/dashboard/conversations', label: 'Conversaciones', icon: ChatIcon },
   { href: '/dashboard/agent', label: 'Agente IA', icon: BotIcon },
   { href: '/dashboard/contacts', label: 'Contactos', icon: ContactsIcon },
-  { href: '/dashboard/metrics', label: 'Métricas', icon: ChartIcon },
-  { href: '/dashboard/settings', label: 'Configuración', icon: SettingsIcon },
+  { href: '/dashboard/metrics', label: 'Metricas', icon: ChartIcon },
+  { href: '/dashboard/settings', label: 'Configuracion', icon: SettingsIcon },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { data: session } = useSession();
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 bg-gray-900 border-r border-gray-800 flex flex-col z-40">
-      <div className="p-6 border-b border-gray-800">
-        <Link href="/dashboard">
+    <aside className={`
+      fixed left-0 top-0 h-full w-64 bg-gray-900 border-r border-gray-800 flex flex-col z-40
+      transition-transform duration-200
+      ${open ? 'translate-x-0' : '-translate-x-full'}
+      md:translate-x-0
+    `}>
+      <div className="p-6 border-b border-gray-800 flex items-center justify-between">
+        <Link href="/dashboard" onClick={onClose}>
           <Image src="/assets/simpleLogo1.png" alt="Simple AI" width={140} height={36} className="h-7 w-auto" />
         </Link>
+        {/* Close button mobile */}
+        <button onClick={onClose} className="md:hidden text-gray-400 hover:text-white">
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
 
       <nav className="flex-1 p-4 space-y-1">
@@ -33,6 +49,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onClose}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
                 active
                   ? 'bg-primary-600/10 text-primary-400'
@@ -59,7 +76,7 @@ export function Sidebar() {
             <p className="text-sm text-white truncate">{session?.user?.name}</p>
             <p className="text-xs text-gray-500 truncate">{session?.user?.email}</p>
           </div>
-          <button onClick={() => signOut({ callbackUrl: '/' })} className="text-gray-500 hover:text-gray-300" title="Cerrar sesión">
+          <button onClick={() => signOut({ callbackUrl: '/' })} className="text-gray-500 hover:text-gray-300" title="Cerrar sesion">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
             </svg>

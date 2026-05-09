@@ -13,6 +13,7 @@ import {
   getFallbackMessage, checkRateLimit, detectInjection,
   INJECTION_RESPONSE,
 } from './lib/production-guards';
+import { transcribeWhatsAppAudio, downloadWhatsAppMedia } from './lib/audio-transcriber';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -312,6 +313,7 @@ async function generateResponse(
   freshSearchProducts: EnrichedProduct[],
   catalog: EnrichedProduct[],
   agentConfig: any,
+  imageData?: { base64: string; mimeType: string },
 ): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[] }> {
   const name = agentConfig.assistantName || 'el vendedor';
   const web = agentConfig.websiteUrl || '';
@@ -333,6 +335,7 @@ async function generateResponse(
 
 # TONO
 Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
+NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
 
 # REGLAS
 
@@ -379,7 +382,12 @@ Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 
 13. NUNCA preguntes "¿te mando foto?" o "¿querés ver foto?". O nombrás el producto
     con datos (y la foto va sola) o no lo nombrás todavía.
 
-14. PRODUCTOS YA MOSTRADOS:
+14. IMAGENES DEL CLIENTE:
+    Si el cliente manda una foto, analizala. Puede ser una prenda que vio y quiere algo parecido,
+    una captura de la web, o una consulta visual. Describí lo que ves y buscá productos similares
+    en el catalogo usando buscar_productos.
+
+15. PRODUCTOS YA MOSTRADOS:
     Si hablás de un producto que YA mostraste antes en la conversación,
     NO lo re-introduzcas. Referencialo natural: "la que te mostré", "esa misma",
     "la Swell que vimos". El cliente ya la tiene en pantalla.
@@ -397,7 +405,25 @@ ${productsBlock}`;
 
   // Asegurar que empiece con user y termine con user
   if (messages.length === 0 || messages[messages.length - 1].role !== 'user') {
-    messages.push({ role: 'user', content: userMessage });
+    if (imageData) {
+      // Mensaje con imagen + texto
+      messages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: imageData.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: imageData.base64,
+            },
+          },
+          { type: 'text', text: userMessage },
+        ],
+      });
+    } else {
+      messages.push({ role: 'user', content: userMessage });
+    }
   }
 
   // Loop de tool use (máx 3 rounds)
@@ -520,11 +546,15 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 // FLUJO PRINCIPAL: mensaje entrante de WhatsApp
 // ============================================================
 async function processInboundMessage(msg: ParsedInboundMessage) {
-  console.log(`Inbound from ${msg.senderPhone}: ${msg.textBody}`);
+  console.log(`Inbound from ${msg.senderPhone} (${msg.type}): ${msg.textBody || msg.mediaId || ''}`);
 
-  if (msg.type !== 'text' || !msg.textBody) return;
+  // Solo procesamos texto, audio e imagen
+  if (msg.type !== 'text' && msg.type !== 'audio' && msg.type !== 'image') {
+    console.log(`Skipping ${msg.type} message`);
+    return;
+  }
 
-  // 1. Buscar canal
+  // 1. Buscar canal (necesitamos accessToken antes de transcribir)
   const channels = await queryByGSI('byChannelExternalId', 'channelExternalId', msg.phoneNumberId);
   const channel = channels[0];
   if (!channel) { console.error(`No channel for ${msg.phoneNumberId}`); return; }
@@ -532,6 +562,43 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
   const tenantId = channel.tenantId as string;
   const accessToken = channel.accessToken as string;
   const phoneNumberId = msg.phoneNumberId;
+
+  // 1b. Si es audio, transcribir con Groq
+  if (msg.type === 'audio' && msg.mediaId) {
+    try {
+      const transcription = await transcribeWhatsAppAudio(msg.mediaId, accessToken, msg.mimeType);
+      if (!transcription) {
+        console.log('Audio transcription empty, skipping');
+        return;
+      }
+      msg.textBody = transcription;
+      msg.type = 'text'; // a partir de acá se trata como texto
+      console.log(`[AUDIO] Transcribed to text: "${transcription.slice(0, 100)}"`);
+    } catch (err: any) {
+      console.error('[AUDIO] Transcription failed:', err.message);
+      await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, 'No pude escuchar el audio, me lo mandas de nuevo o en texto?');
+      return;
+    }
+  }
+
+  // 1c. Si es imagen, descargar para mandarla a Claude
+  let imageBase64: string | undefined;
+  let imageMimeType: string | undefined;
+  if (msg.type === 'image' && msg.mediaId) {
+    try {
+      const imageBuffer = await downloadWhatsAppMedia(msg.mediaId, accessToken);
+      imageBase64 = imageBuffer.toString('base64');
+      imageMimeType = (msg.mimeType || 'image/jpeg').split(';')[0].trim();
+      // Si no mandó texto con la imagen, poner un placeholder
+      if (!msg.textBody) msg.textBody = '[El cliente envio una imagen]';
+      console.log(`[IMAGE] Downloaded ${imageBuffer.length} bytes (${imageMimeType})`);
+    } catch (err: any) {
+      console.error('[IMAGE] Download failed:', err.message);
+      // Continuar sin imagen si falla
+    }
+  }
+
+  if (!msg.textBody) return;
 
   // 2. Deduplicación
   const existingMsgs = await queryItems(`WAMSG#${msg.waMessageId}`);
@@ -734,6 +801,7 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
     // Claude genera respuesta (con tool use si necesita más productos)
     const { text: aiResponse, productsShown, freshProducts } = await generateResponse(
       combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
+      imageBase64 ? { base64: imageBase64, mimeType: imageMimeType || 'image/jpeg' } : undefined,
     );
     recordSuccess();
 

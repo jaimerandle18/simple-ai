@@ -168,7 +168,7 @@ export default function ConversationsPage() {
   return (
     <div className="flex h-full">
       {/* Conversation List */}
-      <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
+      <div className={`${selectedConv ? 'hidden md:flex' : 'flex'} w-full md:w-80 bg-white border-r border-gray-200 flex-col`}>
         <div className="p-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Conversaciones</h2>
           <div className="flex items-center gap-2 mt-1">
@@ -230,20 +230,26 @@ export default function ConversationsPage() {
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col bg-gray-50">
+      <div className={`${selectedConv ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-gray-50`}>
         {!selectedConv ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
               </svg>
-              <p className="text-gray-400">Seleccioná una conversación</p>
+              <p className="text-gray-400">Selecciona una conversacion</p>
             </div>
           </div>
         ) : (
           <>
             {/* Chat Header */}
-            <div className="bg-white border-b border-gray-200 p-4 flex items-center gap-3">
+            <div className="bg-white border-b border-gray-200 p-3 md:p-4 flex items-center gap-3">
+              {/* Back button mobile */}
+              <button onClick={() => setSelectedConv(null)} className="md:hidden text-gray-500 hover:text-gray-700">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                </svg>
+              </button>
               <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center text-primary-600 font-semibold text-sm">
                 {(selectedConv.contactName?.[0] || selectedConv.contactPhone?.[0] || '?').toUpperCase()}
               </div>

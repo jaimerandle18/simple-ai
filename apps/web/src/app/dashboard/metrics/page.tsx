@@ -49,7 +49,7 @@ export default function MetricsPage() {
   const totalOutbound = (m?.botMessages || 0) + (m?.humanMessages || 0);
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Métricas</h1>
         <p className="text-gray-500 text-sm mt-1">Estadísticas de tus conversaciones y agente IA</p>

@@ -183,6 +183,7 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
 
 # TONO
 Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
+NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
 
 # REGLAS
 1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.

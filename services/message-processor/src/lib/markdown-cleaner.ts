@@ -4,5 +4,7 @@ export function cleanMarkdownForWhatsApp(s: string): string {
     .replace(/\*\*([^*]+)\*\*/g, '*$1*')             // **bold** → *bold*
     .replace(/^#{1,6}\s+/gm, '')                     // headers
     .replace(/^>\s+/gm, '')                          // quotes
+    .replace(/¡/g, '')                               // quitar signos de apertura
+    .replace(/¿/g, '')
     .trim();
 }

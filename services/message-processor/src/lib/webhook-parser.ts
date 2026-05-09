@@ -10,6 +10,8 @@ export interface ParsedInboundMessage {
   timestamp: string;
   type: 'text' | 'image' | 'audio' | 'video' | 'document';
   textBody?: string;
+  mediaId?: string;
+  mimeType?: string;
 }
 
 export interface ParsedStatusUpdate {
@@ -39,6 +41,7 @@ export function parseWhatsAppWebhook(body: any): ParseResult {
       if (value.messages?.length) {
         for (const msg of value.messages) {
           const contact = value.contacts?.[0];
+          const mediaObj = msg.audio || msg.image || msg.video || msg.document;
           messages.push({
             phoneNumberId,
             senderPhone: msg.from,
@@ -47,6 +50,8 @@ export function parseWhatsAppWebhook(body: any): ParseResult {
             timestamp: msg.timestamp,
             type: msg.type || 'text',
             textBody: msg.text?.body || msg.caption || '',
+            mediaId: mediaObj?.id,
+            mimeType: mediaObj?.mime_type,
           });
         }
       }

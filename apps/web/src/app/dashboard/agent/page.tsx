@@ -187,8 +187,8 @@ export default function AgentPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-4 md:p-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 md:mb-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Agente IA</h1>
           <p className="text-gray-500 text-sm mt-1">Configurá cómo responde tu asistente a los clientes</p>

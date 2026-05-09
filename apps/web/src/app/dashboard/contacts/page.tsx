@@ -36,9 +36,9 @@ export default function ContactsPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Contactos</h1>
+    <div className="p-4 md:p-8">
+      <div className="mb-6 md:mb-8">
+        <h1 className="text-xl md:text-2xl font-bold text-gray-900">Contactos</h1>
         <p className="text-gray-500 text-sm mt-1">
           {contacts.length} contacto{contacts.length !== 1 ? 's' : ''} registrado{contacts.length !== 1 ? 's' : ''}
         </p>
@@ -57,15 +57,17 @@ export default function ContactsPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <>
+        {/* Desktop: tabla */}
+        <div className="hidden md:block bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <table className="w-full">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Contacto</th>
-                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Teléfono</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Telefono</th>
                 <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Tags</th>
                 <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Conversaciones</th>
-                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Último contacto</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-3">Ultimo contacto</th>
               </tr>
             </thead>
             <tbody>
@@ -81,28 +83,52 @@ export default function ContactsPage() {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{contact.phone}</td>
                   <td className="px-6 py-4">
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 flex-wrap">
                       {contact.tags?.map((tag) => (
-                        <span key={tag} className="bg-primary-50 text-primary-600 text-xs px-2 py-0.5 rounded-full">
-                          {tag}
-                        </span>
+                        <span key={tag} className="bg-primary-50 text-primary-600 text-xs px-2 py-0.5 rounded-full">{tag}</span>
                       ))}
-                      {(!contact.tags || contact.tags.length === 0) && (
-                        <span className="text-xs text-gray-400">Sin tags</span>
-                      )}
+                      {(!contact.tags || contact.tags.length === 0) && <span className="text-xs text-gray-400">Sin tags</span>}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{contact.totalConversations || 0}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">
-                    {contact.lastConversationAt
-                      ? new Date(contact.lastConversationAt).toLocaleDateString('es-AR')
-                      : '--'}
+                    {contact.lastConversationAt ? new Date(contact.lastConversationAt).toLocaleDateString('es-AR') : '--'}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        {/* Mobile: cards */}
+        <div className="md:hidden space-y-3">
+          {contacts.map((contact) => (
+            <div key={contact.phone} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center text-primary-600 font-semibold text-sm">
+                  {(contact.name?.[0] || contact.phone?.[0] || '?').toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{contact.name || contact.phone}</p>
+                  <p className="text-xs text-gray-500">{contact.phone}</p>
+                </div>
+                <span className="text-xs text-gray-400">{contact.totalConversations || 0} conv.</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex gap-1 flex-wrap">
+                  {contact.tags?.map((tag) => (
+                    <span key={tag} className="bg-primary-50 text-primary-600 text-xs px-2 py-0.5 rounded-full">{tag}</span>
+                  ))}
+                  {(!contact.tags || contact.tags.length === 0) && <span className="text-xs text-gray-400">Sin tags</span>}
+                </div>
+                <span className="text-xs text-gray-400">
+                  {contact.lastConversationAt ? new Date(contact.lastConversationAt).toLocaleDateString('es-AR') : ''}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        </>
       )}
     </div>
   );

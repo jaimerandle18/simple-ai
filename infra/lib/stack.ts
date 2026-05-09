@@ -121,6 +121,7 @@ export class SimpleAiStack extends cdk.Stack {
         TABLE_NAME: table.tableName,
         BUCKET_NAME: bucket.bucketName,
         ANTHROPIC_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/anthropic:SecretString:apiKey}}`,
+        GROQ_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/groq:SecretString:apiKey}}`,
         STAGE: stage,
       },
       timeout: cdk.Duration.seconds(90),
