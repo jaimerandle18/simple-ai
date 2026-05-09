@@ -89,18 +89,20 @@ export default function ConversationsPage() {
     api('/conversations/tags', { tenantId }).then(setAllTags).catch(console.error);
   }, [tenantId]);
 
+  const updateConv = (convId: string, updates: Partial<Conversation>) => {
+    setConversations(prev => prev.map(c =>
+      c.conversationId === convId ? { ...c, ...updates } : c
+    ));
+  };
+
   const addTag = async (tag: string) => {
     if (!selectedConv || !tenantId || !tag.trim()) return;
-    const newTags = [...(selectedConv.tags || []), tag.trim().toLowerCase()];
-    const uniqueTags = [...new Set(newTags)];
+    const newTags = [...new Set([...(selectedConv.tags || []), tag.trim().toLowerCase()])];
     try {
       await api(`/conversations/${selectedConv.conversationId}`, {
-        method: 'PATCH', tenantId, body: { tags: uniqueTags },
+        method: 'PATCH', tenantId, body: { tags: newTags },
       });
-      setSelectedConv({ ...selectedConv, tags: uniqueTags });
-      setConversations(prev => prev.map(c =>
-        c.conversationId === selectedConv.conversationId ? { ...c, tags: uniqueTags } : c
-      ));
+      updateConv(selectedConv.conversationId, { tags: newTags });
       if (!allTags.includes(tag.trim().toLowerCase())) {
         setAllTags(prev => [...prev, tag.trim().toLowerCase()].sort());
       }
@@ -114,10 +116,7 @@ export default function ConversationsPage() {
       await api(`/conversations/${selectedConv.conversationId}`, {
         method: 'PATCH', tenantId, body: { tags: newTags },
       });
-      setSelectedConv({ ...selectedConv, tags: newTags });
-      setConversations(prev => prev.map(c =>
-        c.conversationId === selectedConv.conversationId ? { ...c, tags: newTags } : c
-      ));
+      updateConv(selectedConv.conversationId, { tags: newTags });
     } catch (err) { console.error(err); }
   };
 
@@ -126,19 +125,10 @@ export default function ConversationsPage() {
     const newAssignment = selectedConv.assignedTo === 'bot' ? 'user' : 'bot';
     try {
       await api(`/conversations/${selectedConv.conversationId}`, {
-        method: 'PATCH',
-        tenantId,
-        body: { assignedTo: newAssignment },
+        method: 'PATCH', tenantId, body: { assignedTo: newAssignment },
       });
-      setSelectedConv({ ...selectedConv, assignedTo: newAssignment });
-      setConversations(prev => prev.map(c =>
-        c.conversationId === selectedConv.conversationId
-          ? { ...c, assignedTo: newAssignment }
-          : c
-      ));
-    } catch (err) {
-      console.error(err);
-    }
+      updateConv(selectedConv.conversationId, { assignedTo: newAssignment });
+    } catch (err) { console.error(err); }
   };
 
   if (loading) {
