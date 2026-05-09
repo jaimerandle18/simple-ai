@@ -40,7 +40,9 @@ export async function handleConversations(event: APIGatewayProxyEventV2) {
   if (method === 'GET' && msgMatch) {
     const convId = msgMatch[1];
     const limit = parseInt(event.queryStringParameters?.limit || '50');
-    const messages = await queryItems(`CONV#${convId}`, 'MSG#', { limit, scanForward: true });
+    // Traer los últimos N mensajes (desc) y revertir a cronológico
+    const messages = await queryItems(`CONV#${convId}`, 'MSG#', { limit });
+    messages.reverse();
     return json(messages);
   }
 
