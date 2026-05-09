@@ -635,8 +635,11 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
   await putItem({
     ...keys.message(conversationId, now, msgId),
     messageId: msgId, conversationId, tenantId,
-    direction: 'inbound', sender: 'contact', type: 'text',
-    content: msg.textBody, waMessageId: msg.waMessageId, timestamp: now,
+    direction: 'inbound', sender: 'contact',
+    type: imageBase64 ? 'image' : 'text',
+    content: msg.textBody,
+    ...(imageBase64 ? { imageBase64: imageBase64.slice(0, 200000), imageMimeType } : {}),
+    waMessageId: msg.waMessageId, timestamp: now,
   });
 
   await putItem({
@@ -835,6 +838,16 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
     for (const p of imagesToSend) {
       const caption = `*${p.name}*\n${p.brand ? `${p.brand} | ` : ''}$${(p.priceNum || 0).toLocaleString('es-AR')}`;
       await sendWhatsAppImage(phoneNumberId, accessToken, msg.senderPhone, p.imageUrl, caption);
+      // Guardar imagen como mensaje en DynamoDB
+      const imgNow = new Date().toISOString();
+      const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await putItem({
+        ...keys.message(conversationId, imgNow, imgId),
+        messageId: imgId, conversationId, tenantId,
+        direction: 'outbound', sender: 'bot', type: 'image',
+        content: caption, imageUrl: p.imageUrl,
+        status: 'sent', timestamp: imgNow,
+      });
     }
 
     // Guardar productos mostrados para el próximo turno (máx 8)

@@ -24,6 +24,9 @@ interface Message {
   content: string;
   timestamp: string;
   status?: string;
+  imageUrl?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
 }
 
 export default function ConversationsPage() {
@@ -31,7 +34,7 @@ export default function ConversationsPage() {
   const tenantId = auth?.tenantId;
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -42,6 +45,9 @@ export default function ConversationsPage() {
   const [allTags, setAllTags] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const selectedConv = conversations.find(c => c.conversationId === selectedId) || null;
+  const setSelectedConv = (conv: Conversation | null) => setSelectedId(conv?.conversationId || null);
+
   useEffect(() => {
     if (!tenantId) return;
     api('/conversations', { tenantId })
@@ -51,13 +57,13 @@ export default function ConversationsPage() {
   }, [tenantId]);
 
   useEffect(() => {
-    if (!selectedConv || !tenantId) return;
+    if (!selectedId || !tenantId) return;
     setLoadingMsgs(true);
-    api(`/conversations/${selectedConv.conversationId}/messages`, { tenantId })
+    api(`/conversations/${selectedId}/messages`, { tenantId })
       .then(setMessages)
       .catch(console.error)
       .finally(() => setLoadingMsgs(false));
-  }, [selectedConv, tenantId]);
+  }, [selectedId, tenantId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -65,9 +71,9 @@ export default function ConversationsPage() {
 
   // Polling for new messages
   useEffect(() => {
-    if (!selectedConv || !tenantId) return;
+    if (!selectedId || !tenantId) return;
     const interval = setInterval(() => {
-      api(`/conversations/${selectedConv.conversationId}/messages`, { tenantId })
+      api(`/conversations/${selectedId}/messages`, { tenantId })
         .then(setMessages)
         .catch(console.error);
       api('/conversations', { tenantId })
@@ -75,7 +81,7 @@ export default function ConversationsPage() {
         .catch(console.error);
     }, 5000);
     return () => clearInterval(interval);
-  }, [selectedConv, tenantId]);
+  }, [selectedId, tenantId]);
 
   // Cargar tags disponibles
   useEffect(() => {
@@ -311,34 +317,54 @@ export default function ConversationsPage() {
               </div>
             </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {/* Messages — estilo WhatsApp */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-1" style={{ backgroundColor: '#e5ddd5' }}>
               {loadingMsgs ? (
                 <div className="flex justify-center py-8">
                   <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
                 </div>
               ) : (
-                messages.map((msg) => (
-                  <div key={msg.messageId} className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[70%] px-4 py-2 rounded-2xl text-sm ${
-                      msg.direction === 'outbound'
-                        ? msg.sender === 'bot'
-                          ? 'bg-gradient-to-r from-primary-500 to-secondary-500 text-white rounded-br-md'
-                          : 'bg-primary-600 text-white rounded-br-md'
-                        : 'bg-white border border-gray-200 text-gray-900 rounded-bl-md shadow-sm'
-                    }`}>
-                      {msg.sender === 'bot' && msg.direction === 'outbound' && (
-                        <p className="text-[10px] opacity-70 mb-1">Agente IA</p>
-                      )}
-                      <p>{msg.content}</p>
-                      <p className={`text-[10px] mt-1 text-right ${
-                        msg.direction === 'outbound' ? 'opacity-70' : 'text-gray-400'
+                messages.map((msg) => {
+                  const isOutbound = msg.direction === 'outbound';
+                  const isImage = msg.type === 'image';
+                  const imgSrc = msg.imageUrl || (msg.imageBase64 ? `data:${msg.imageMimeType || 'image/jpeg'};base64,${msg.imageBase64}` : null);
+
+                  return (
+                    <div key={msg.messageId} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[75%] rounded-lg shadow-sm overflow-hidden ${
+                        isOutbound
+                          ? 'bg-[#dcf8c6] rounded-tr-none'
+                          : 'bg-white rounded-tl-none'
                       }`}>
-                        {new Date(msg.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+                        {/* Imagen */}
+                        {isImage && imgSrc && (
+                          <img
+                            src={imgSrc}
+                            alt=""
+                            className="w-full max-w-[300px] h-auto object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        )}
+
+                        {/* Texto */}
+                        <div className="px-3 py-1.5">
+                          {msg.sender === 'bot' && isOutbound && !isImage && (
+                            <p className="text-[10px] text-primary-600 font-medium mb-0.5">Agente IA</p>
+                          )}
+                          {msg.content && msg.content !== '[El cliente envio una imagen]' && (
+                            <p className="text-sm text-gray-900 whitespace-pre-wrap">{msg.content}</p>
+                          )}
+                          <p className="text-[10px] text-gray-400 text-right mt-0.5">
+                            {new Date(msg.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+                            {isOutbound && msg.status === 'read' && ' ✓✓'}
+                            {isOutbound && msg.status === 'delivered' && ' ✓✓'}
+                            {isOutbound && msg.status === 'sent' && ' ✓'}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
               <div ref={messagesEndRef} />
             </div>
