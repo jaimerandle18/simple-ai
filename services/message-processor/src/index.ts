@@ -865,13 +865,18 @@ async function processWahaMessage(msg: ParsedWahaMessage) {
 
   const { tenantId, sessionName, senderPhone, senderName, waMessageId, textBody } = msg;
 
-  // 1. Leer config del canal WAHA
+  // 1. Verificar canal WAHA activo
   const wahaChannel = await getItem(keys.wahaChannel(tenantId));
-  if (!wahaChannel?.wahaUrl || !wahaChannel.active) {
+  if (!wahaChannel?.active) {
     console.error(`[WAHA] No active channel for tenant ${tenantId}`);
     return;
   }
-  const { wahaUrl, apiKey } = wahaChannel as { wahaUrl: string; apiKey: string };
+  const wahaUrl = (process.env.WAHA_URL || '').replace(/\/$/, '');
+  const apiKey = process.env.WAHA_API_KEY || '';
+  if (!wahaUrl) {
+    console.error('[WAHA] WAHA_URL not configured');
+    return;
+  }
 
   const sendReply = (text: string) => sendWahaMessage(wahaUrl, apiKey, sessionName, senderPhone, text);
 
