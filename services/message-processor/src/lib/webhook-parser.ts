@@ -79,7 +79,6 @@ export function parseWhatsAppWebhook(body: any): ParseResult {
 
 export interface ParsedWahaMessage {
   sessionName: string;
-  tenantId: string;
   senderPhone: string;
   senderName: string;
   waMessageId: string;
@@ -87,30 +86,65 @@ export interface ParsedWahaMessage {
   textBody: string;
 }
 
-/** Extrae tenantId del nombre de sesión: "tenant_<uuid>" → "<uuid>" */
-function tenantFromSession(session: string): string {
-  return session.startsWith('tenant_') ? session.slice('tenant_'.length) : session;
-}
-
 export function parseWahaWebhook(body: any): ParsedWahaMessage | null {
   if (body.event !== 'message' || !body.payload) return null;
 
   const p = body.payload;
-  if (p.fromMe) return null; // ignorar mensajes propios
-  // Solo procesar mensajes de texto (type "chat" en WAHA)
+  if (p.fromMe) return null;
   if (p.type && p.type !== 'chat') return null;
   if (!p.body) return null;
 
   const senderPhone = (p.from || '').replace(/@c\.us$/, '').replace(/@g\.us$/, '');
-  const sessionName = body.session || '';
+  const sessionName = body.session || 'default';
 
   return {
     sessionName,
-    tenantId: tenantFromSession(sessionName),
     senderPhone,
     senderName: p._data?.notifyName || senderPhone,
     waMessageId: p.id || `waha_${Date.now()}`,
     timestamp: String(p.timestamp || Math.floor(Date.now() / 1000)),
     textBody: p.body,
+  };
+}
+
+// ─── Evolution API ─────────────────────────────────────────────
+
+export interface ParsedEvolutionMessage {
+  instanceName: string;
+  tenantId: string;   // derived from instanceName: "tenant_{uuid}" → "{uuid}"
+  senderPhone: string;
+  senderName: string;
+  waMessageId: string;
+  timestamp: string;
+  textBody: string;
+}
+
+export function parseEvolutionWebhook(body: any): ParsedEvolutionMessage | null {
+  if (body.event !== 'messages.upsert') return null;
+
+  const data = body.data;
+  if (!data) return null;
+
+  const key = data.key || {};
+  if (key.fromMe) return null;
+
+  // Only process text messages
+  const msg = data.message || {};
+  const textBody = msg.conversation || msg.extendedTextMessage?.text || '';
+  if (!textBody) return null;
+
+  const instanceName = body.instance || '';
+  const tenantId = instanceName.startsWith('tenant_') ? instanceName.slice('tenant_'.length) : instanceName;
+  const remoteJid = key.remoteJid || '';
+  const senderPhone = remoteJid.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, '');
+
+  return {
+    instanceName,
+    tenantId,
+    senderPhone,
+    senderName: data.pushName || senderPhone,
+    waMessageId: key.id || `evo_${Date.now()}`,
+    timestamp: String(data.messageTimestamp || Math.floor(Date.now() / 1000)),
+    textBody,
   };
 }

@@ -99,6 +99,27 @@ export async function sendWahaMessage(
   }
 }
 
+export async function sendEvolutionMessage(
+  evolutionUrl: string,
+  apiKey: string,
+  instanceName: string,
+  recipientPhone: string,
+  text: string,
+): Promise<{ messageId: string }> {
+  const url = `${evolutionUrl.replace(/\/$/, '')}/message/sendText/${instanceName}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: apiKey },
+    body: JSON.stringify({ number: recipientPhone, text }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Evolution API sendText error (${res.status}): ${err}`);
+  }
+  const data: any = await res.json();
+  return { messageId: data?.key?.id || `evo_${Date.now()}` };
+}
+
 export async function markAsRead(
   phoneNumberId: string,
   accessToken: string,
