@@ -81,8 +81,8 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     const apiBase = (process.env.API_BASE_URL || '').replace(/\/$/, '');
     const webhookUrl = apiBase ? `${apiBase}/webhook` : '';
 
-    // Intentar crear/iniciar sesión en WAHA
-    const sessionBody: any = { name: sessionName };
+    // Intentar crear/iniciar sesión en WAHA con engine NOWEB
+    const sessionBody: any = { name: sessionName, engine: 'NOWEB' };
     if (webhookUrl) {
       sessionBody.config = { webhooks: [{ url: webhookUrl, events: ['message'] }] };
     }
