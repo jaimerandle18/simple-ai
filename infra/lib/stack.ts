@@ -6,6 +6,11 @@ import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrat
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
+import * as efs from 'aws-cdk-lib/aws-efs';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -18,6 +23,7 @@ export class SimpleAiStack extends cdk.Stack {
     super(scope, id, props);
 
     const stage = props.stageName;
+    const wahaApiKey = process.env.WAHA_API_KEY || 'simple-ai-waha-secret';
 
     // ========== DynamoDB (single-table) ==========
     const table = new dynamodb.Table(this, 'MainTable', {
@@ -34,26 +40,23 @@ export class SimpleAiStack extends cdk.Stack {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'updatedAt', type: dynamodb.AttributeType.STRING },
     });
-
     table.addGlobalSecondaryIndex({
       indexName: 'byChannelExternalId',
       partitionKey: { name: 'channelExternalId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
     });
-
     table.addGlobalSecondaryIndex({
       indexName: 'byEmail',
       partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
     });
-
     table.addGlobalSecondaryIndex({
       indexName: 'byContactPhone',
       partitionKey: { name: 'contactPhone', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
     });
 
-    // ========== S3 (attachments) ==========
+    // ========== S3 ==========
     const bucket = new s3.Bucket(this, 'AttachmentsBucket', {
       bucketName: `simple-ai-attachments-${stage}`,
       removalPolicy: stage === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
@@ -65,6 +68,124 @@ export class SimpleAiStack extends cdk.Stack {
       queueName: `simple-ai-incoming-messages-${stage}`,
       visibilityTimeout: cdk.Duration.seconds(120),
     });
+
+    // ========== VPC (solo subnets públicas, sin NAT Gateway) ==========
+    const vpc = new ec2.Vpc(this, 'Vpc', {
+      vpcName: `simple-ai-${stage}`,
+      maxAzs: 2,
+      natGateways: 0,
+      subnetConfiguration: [
+        { name: 'public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
+      ],
+    });
+
+    // ========== EFS para sesiones WAHA (persiste tras reinicios) ==========
+    const wahaEfs = new efs.FileSystem(this, 'WahaEfs', {
+      vpc,
+      fileSystemName: `simple-ai-waha-${stage}`,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
+      throughputMode: efs.ThroughputMode.BURSTING,
+    });
+
+    const wahaAccessPoint = wahaEfs.addAccessPoint('WahaAP', {
+      path: '/sessions',
+      createAcl: { ownerGid: '1000', ownerUid: '1000', permissions: '755' },
+      posixUser: { gid: '1000', uid: '1000' },
+    });
+
+    // ========== ECS Cluster ==========
+    const cluster = new ecs.Cluster(this, 'WahaCluster', {
+      vpc,
+      clusterName: `simple-ai-waha-${stage}`,
+    });
+
+    // ========== Task Definition ==========
+    const wahaTaskDef = new ecs.FargateTaskDefinition(this, 'WahaTaskDef', {
+      family: `simple-ai-waha-${stage}`,
+      memoryLimitMiB: 512,
+      cpu: 256,
+    });
+
+    wahaTaskDef.addVolume({
+      name: 'waha-sessions',
+      efsVolumeConfiguration: {
+        fileSystemId: wahaEfs.fileSystemId,
+        transitEncryption: 'ENABLED',
+        authorizationConfig: {
+          accessPointId: wahaAccessPoint.accessPointId,
+          iam: 'ENABLED',
+        },
+      },
+    });
+
+    wahaEfs.grantRootAccess(wahaTaskDef.taskRole);
+
+    const wahaLogGroup = new logs.LogGroup(this, 'WahaLogGroup', {
+      logGroupName: `/ecs/simple-ai-waha-${stage}`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const wahaContainer = wahaTaskDef.addContainer('waha', {
+      // devlikeapro/waha incluye el engine NOWEB desde v2023+
+      image: ecs.ContainerImage.fromRegistry('devlikeapro/waha'),
+      environment: {
+        WHATSAPP_API_KEY: wahaApiKey,
+        WHATSAPP_DEFAULT_ENGINE: 'NOWEB',
+        WHATSAPP_SESSIONS_PATH: '/app/.waha/sessions',
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'waha',
+        logGroup: wahaLogGroup,
+      }),
+      portMappings: [{ containerPort: 3000 }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(10),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(90),
+      },
+    });
+
+    wahaContainer.addMountPoints({
+      sourceVolume: 'waha-sessions',
+      containerPath: '/app/.waha/sessions',
+      readOnly: false,
+    });
+
+    // ========== Fargate Service + ALB ==========
+    const wahaService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'WahaService', {
+      cluster,
+      taskDefinition: wahaTaskDef,
+      serviceName: `simple-ai-waha-${stage}`,
+      desiredCount: 1,
+      publicLoadBalancer: true,
+      assignPublicIp: true,
+      taskSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      listenerPort: 80,
+      healthCheckGracePeriod: cdk.Duration.seconds(120),
+    });
+
+    // EFS accesible desde el servicio Fargate
+    wahaEfs.connections.allowDefaultPortFrom(wahaService.service.connections);
+
+    // ALB health check
+    wahaService.targetGroup.configureHealthCheck({
+      path: '/',
+      healthyHttpCodes: '200-399',
+      interval: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(10),
+      healthyThresholdCount: 2,
+      unhealthyThresholdCount: 5,
+    });
+
+    // Reducir tiempo de drenado (el servicio es stateless por fuera de WAHA)
+    wahaService.targetGroup.setAttribute('deregistration_delay.timeout_seconds', '10');
+
+    const wahaUrl = `http://${wahaService.loadBalancer.loadBalancerDnsName}`;
+    new cdk.CfnOutput(this, 'WahaUrl', { value: wahaUrl });
 
     // ========== Lambdas ==========
     const apiLambda = new lambda.Function(this, 'ApiLambda', {
@@ -81,15 +202,14 @@ export class SimpleAiStack extends cdk.Stack {
         GOOGLE_SEARCH_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/google-search:SecretString:apiKey}}`,
         GOOGLE_SEARCH_CX: `{{resolve:secretsmanager:simple-ai/${stage}/google-search:SecretString:cx}}`,
         FIRECRAWL_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/firecrawl:SecretString:apiKey}}`,
-        WAHA_URL: process.env.WAHA_URL || '',
-        WAHA_API_KEY: process.env.WAHA_API_KEY || '',
+        WAHA_URL: wahaUrl,
+        WAHA_API_KEY: wahaApiKey,
         STAGE: stage,
       },
       timeout: cdk.Duration.seconds(120),
       memorySize: 512,
     });
 
-    // Function URL for long-running requests (no 30s API Gateway limit)
     const apiLambdaUrl = apiLambda.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
@@ -124,8 +244,8 @@ export class SimpleAiStack extends cdk.Stack {
         BUCKET_NAME: bucket.bucketName,
         ANTHROPIC_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/anthropic:SecretString:apiKey}}`,
         GROQ_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/groq:SecretString:apiKey}}`,
-        WAHA_URL: process.env.WAHA_URL || '',
-        WAHA_API_KEY: process.env.WAHA_API_KEY || '',
+        WAHA_URL: wahaUrl,
+        WAHA_API_KEY: wahaApiKey,
         STAGE: stage,
       },
       timeout: cdk.Duration.seconds(90),
@@ -140,11 +260,8 @@ export class SimpleAiStack extends cdk.Stack {
     incomingMessagesQueue.grantSendMessages(webhookLambda);
     incomingMessagesQueue.grantSendMessages(apiLambda);
 
-    // SQS trigger for message processor
     messageProcessorLambda.addEventSource(
-      new lambdaEventSources.SqsEventSource(incomingMessagesQueue, {
-        batchSize: 1,
-      })
+      new lambdaEventSources.SqsEventSource(incomingMessagesQueue, { batchSize: 1 })
     );
 
     // ========== API Gateway ==========
@@ -169,7 +286,6 @@ export class SimpleAiStack extends cdk.Stack {
       integration: new apigatewayv2Integrations.HttpLambdaIntegration('ApiIntegration', apiLambda),
     });
 
-    // Inyectar la URL del API Gateway en el Lambda de API (para que WAHA sepa dónde mandar webhooks)
     apiLambda.addEnvironment('API_BASE_URL', (httpApi.url ?? '').replace(/\/$/, ''));
 
     // ========== Outputs ==========
