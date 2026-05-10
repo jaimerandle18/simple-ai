@@ -174,7 +174,7 @@ export class SimpleAiStack extends cdk.Stack {
     // ALB health check
     wahaService.targetGroup.configureHealthCheck({
       path: '/',
-      healthyHttpCodes: '200-399',
+      healthyHttpCodes: '200-401', // WAHA devuelve 401 sin auth key — es válido, el servidor está up
       interval: cdk.Duration.seconds(30),
       timeout: cdk.Duration.seconds(10),
       healthyThresholdCount: 2,
