@@ -179,14 +179,7 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
     const name = agentCfg.assistantName || 'el vendedor';
     const web = agentCfg.websiteUrl || '';
 
-    const systemPrompt = `Sos ${name}, vendedor virtual por WhatsApp de un comercio argentino.${web ? ` Web: ${web}` : ''}
-
-# TONO
-Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
-NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
-
-# REGLAS
-1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.
+    const HARDCODED_RULES_TC = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.
 2. NUNCA digas "no tengo eso cargado" si hay productos en contexto.
 3. NUNCA cierres con "¿algo más?". Pregunta específica.
 4. Precio formateado: $XX.XXX
@@ -194,12 +187,22 @@ NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
 6. USO DE buscar_productos: solo si el cliente pide categoría/producto NUEVO.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES.
 8. Si el cliente quiere comprar, pedile los datos.
-9. Si insulta o pide humano: "Te paso con alguien del equipo."
+9. Si insulta o pide humano: "Te paso con alguien del equipo."`;
+
+    const activeRules = agentCfg.extraInstructions || HARDCODED_RULES_TC;
+
+    const systemPrompt = `Sos ${name}, vendedor virtual por WhatsApp de un comercio argentino.${web ? ` Web: ${web}` : ''}
+
+# TONO
+Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
+NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
+
+# REGLAS
+${activeRules}
 
 # CATEGORÍAS
 ${categories}
 ${agentCfg.promotions ? `\n# PROMOCIONES\n${agentCfg.promotions}` : ''}
-${agentCfg.extraInstructions ? `\n# REGLAS DEL NEGOCIO\n${agentCfg.extraInstructions}` : ''}
 ${agentCfg.businessHours ? `\n# HORARIO\n${agentCfg.businessHours}` : ''}
 ${agentCfg.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA\n${agentCfg.welcomeMessage}` : ''}
 
@@ -275,6 +278,128 @@ ${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto
       console.error('test-chat error:', err);
       return error('Error: ' + err.message, 500);
     }
+  }
+
+  // ============================================================
+  // POST /agents/feedback — GUARDAR CORRECCIÓN Y ACTUALIZAR PROMPT
+  // ============================================================
+  if (method === 'POST' && path === '/agents/feedback') {
+    const body = JSON.parse(event.body || '{}');
+    const { messageId, originalResponse, correction, conversationId } = body;
+    if (!originalResponse || !correction) return error('originalResponse and correction are required');
+
+    const now = new Date().toISOString();
+    const feedbackId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    // Guardar feedback crudo
+    await putItem({
+      PK: `TENANT#${tenantId}`,
+      SK: `FEEDBACK#${now}#${feedbackId}`,
+      tenantId, feedbackId,
+      messageId: messageId || null,
+      conversationId: conversationId || null,
+      originalResponse,
+      correction,
+      createdAt: now,
+    });
+
+    // Leer agente y reglas existentes
+    const agent = await getItem(keys.agent(tenantId, 'main'));
+    const cfg = agent?.agentConfig || {};
+
+    // Reglas hardcodeadas del sistema (base)
+    const HARDCODED_RULES = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes productos ni precios.
+2. NUNCA mandes al cliente a la web. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos.
+3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
+4. Precio formateado: $XX.XXX (ej: $67.186)
+5. Las fotos se envían AUTOMÁTICAMENTE. NO listes productos uno por uno con sus datos.
+6. USO DE buscar_productos: solo si el cliente pide categoría o producto NUEVO no presente en contexto.
+7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación.
+8. Si el cliente quiere comprar, pedile los datos necesarios.
+9. Si insulta o pide humano: "Te paso con alguien del equipo."
+10. FOTOS: Si nombrás un producto, mencionalo COMPLETO con nombre + precio o specs.
+11. NUNCA preguntes "¿te mando foto?". O nombrás el producto con datos o no lo nombrás.
+12. Si el cliente manda una foto, analizala y buscá productos similares con buscar_productos.
+13. Si hablás de un producto ya mostrado, referencialo natural: "la que te mostré", "esa misma".`;
+
+    // Reglas actualizadas por feedback previo (pueden haber modificado las hardcodeadas)
+    const currentRules: string = cfg.extraInstructions || HARDCODED_RULES;
+
+    // Haiku: recibe el set completo de reglas y lo actualiza según la corrección
+    let proposedRules: string = currentRules;
+    try {
+      const ruleRes = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        messages: [{
+          role: 'user',
+          content: `El agente de ventas cometió un error. Debés actualizar el conjunto de reglas.
+
+REGLAS ACTUALES:
+${currentRules}
+
+ERROR COMETIDO:
+Respuesta incorrecta del agente: "${originalResponse.slice(0, 300)}"
+Corrección indicada: "${correction.slice(0, 300)}"
+
+TAREA:
+- Buscá qué regla existente cubre el mismo tema que este error.
+- Si existe: modificala para que sea correcta (puede ser una regla hardcodeada o una ya corregida).
+- Si no existe: agregá una regla nueva al final.
+- Devolvé el bloque COMPLETO de reglas actualizado, incluyendo las que no cambiaron.
+- Mantené el formato numerado. No agregues explicaciones.`,
+        }],
+      });
+      const txt = ruleRes.content[0].type === 'text' ? ruleRes.content[0].text.trim() : null;
+      if (txt) proposedRules = txt.slice(0, 3000);
+    } catch (err) {
+      console.error('feedback rule generation error:', err);
+    }
+
+    // Generar preview: ¿cómo respondería el agente con las reglas propuestas?
+    let previewResponse: string = '';
+    try {
+      const previewRes = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{
+          role: 'user',
+          content: `Sos un agente de ventas por WhatsApp argentino. Estas son tus reglas de negocio:
+
+${proposedRules}
+
+Situación: el agente respondió incorrectamente esto:
+"${originalResponse.slice(0, 300)}"
+
+La corrección indicada fue: "${correction.slice(0, 300)}"
+
+Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas actualizadas. Sé breve y natural, como en WhatsApp.`,
+        }],
+      });
+      previewResponse = previewRes.content[0].type === 'text' ? previewRes.content[0].text.trim() : '';
+    } catch (err) {
+      console.error('feedback preview error:', err);
+    }
+
+    return json({ proposedRules, previewResponse });
+  }
+
+  // ============================================================
+  // POST /agents/feedback/confirm — GUARDAR REGLAS APROBADAS
+  // ============================================================
+  if (method === 'POST' && path === '/agents/feedback/confirm') {
+    const body = JSON.parse(event.body || '{}');
+    const { proposedRules } = body;
+    if (!proposedRules) return error('proposedRules is required');
+
+    const agent = await getItem(keys.agent(tenantId, 'main'));
+    if (!agent) return error('Agent not found', 404);
+
+    const cfg = agent.agentConfig || {};
+    cfg.extraInstructions = proposedRules.slice(0, 3000);
+    await putItem({ ...agent, agentConfig: cfg, updatedAt: new Date().toISOString() });
+
+    return json({ ok: true });
   }
 
   // ============================================================

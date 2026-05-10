@@ -4,6 +4,16 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
 
+interface FeedbackTarget {
+  messageId: string;
+  content: string;
+}
+
+interface FeedbackPreview {
+  proposedRules: string;
+  previewResponse: string;
+}
+
 interface Conversation {
   conversationId: string;
   contactPhone: string;
@@ -43,6 +53,11 @@ export default function ConversationsPage() {
   const [tagInput, setTagInput] = useState('');
   const [filterTag, setFilterTag] = useState('');
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [feedbackTarget, setFeedbackTarget] = useState<FeedbackTarget | null>(null);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackStep, setFeedbackStep] = useState<'write' | 'loading' | 'preview' | 'done'>('write');
+  const [feedbackPreview, setFeedbackPreview] = useState<FeedbackPreview | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedConv = conversations.find(c => c.conversationId === selectedId) || null;
@@ -88,6 +103,56 @@ export default function ConversationsPage() {
     if (!tenantId) return;
     api('/conversations/tags', { tenantId }).then(setAllTags).catch(console.error);
   }, [tenantId]);
+
+  const closeFeedback = () => {
+    setFeedbackTarget(null);
+    setFeedbackText('');
+    setFeedbackStep('write');
+    setFeedbackPreview(null);
+    setFeedbackError(null);
+  };
+
+  const requestPreview = async () => {
+    if (!feedbackTarget || !feedbackText.trim() || !tenantId) return;
+    setFeedbackStep('loading');
+    try {
+      const result = await api('/agents/feedback', {
+        method: 'POST',
+        tenantId,
+        body: {
+          messageId: feedbackTarget.messageId,
+          originalResponse: feedbackTarget.content,
+          correction: feedbackText.trim(),
+          conversationId: selectedId,
+        },
+      });
+      setFeedbackPreview(result);
+      setFeedbackStep('preview');
+    } catch (err) {
+      console.error(err);
+      setFeedbackStep('write');
+      setFeedbackError('No se pudo generar el preview. Intentá de nuevo.');
+    }
+  };
+
+  const confirmFeedback = async () => {
+    if (!feedbackPreview || !tenantId) return;
+    setFeedbackStep('loading');
+    try {
+      const result = await api('/agents/feedback/confirm', {
+        method: 'POST',
+        tenantId,
+        body: { proposedRules: feedbackPreview.proposedRules },
+      });
+      console.log('[feedback confirm]', result);
+      setFeedbackStep('done');
+      setTimeout(closeFeedback, 1800);
+    } catch (err) {
+      console.error(err);
+      setFeedbackStep('preview');
+      setFeedbackError('No se pudo guardar. Intentá de nuevo.');
+    }
+  };
 
   const updateConv = (convId: string, updates: Partial<Conversation>) => {
     setConversations(prev => prev.map(c =>
@@ -225,6 +290,145 @@ export default function ConversationsPage() {
         </div>
       </div>
 
+      {/* Modal de feedback */}
+      {feedbackTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="p-6">
+
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Corregir respuesta del agente</h3>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    {(['write', 'preview'] as const).map((s, i) => (
+                      <div key={s} className="flex items-center gap-1.5">
+                        <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center ${
+                          feedbackStep === s || (feedbackStep === 'loading' && i === 0 && !feedbackPreview) || (feedbackStep === 'done')
+                            ? 'bg-primary-600 text-white'
+                            : feedbackStep === 'preview' && i === 0
+                            ? 'bg-green-500 text-white'
+                            : 'bg-gray-200 text-gray-500'
+                        }`}>{i + 1}</span>
+                        <span className="text-[10px] text-gray-400">{i === 0 ? 'Corrección' : 'Preview'}</span>
+                        {i === 0 && <span className="text-gray-300 text-xs">→</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={closeFeedback} className="text-gray-400 hover:text-gray-600">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Error */}
+              {feedbackError && (
+                <div className="mb-3 flex items-center gap-2 text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm">
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  </svg>
+                  {feedbackError}
+                </div>
+              )}
+
+              {/* Respuesta original — siempre visible */}
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
+                <p className="text-[10px] text-primary-600 font-medium mb-1">Respuesta incorrecta del agente</p>
+                <p className="text-sm text-gray-700 whitespace-pre-wrap line-clamp-3">{feedbackTarget.content}</p>
+              </div>
+
+              {/* PASO 1: escribir corrección */}
+              {(feedbackStep === 'write' || (feedbackStep === 'loading' && !feedbackPreview)) && (
+                <>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    ¿Cuál fue el error? ¿Cómo debería haber respondido?
+                  </label>
+                  <textarea
+                    value={feedbackText}
+                    onChange={e => { setFeedbackText(e.target.value); setFeedbackError(null); }}
+                    placeholder="Ej: El agente dijo que no había stock pero sí había. Debería haber consultado antes de responder."
+                    rows={4}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+                    autoFocus
+                    disabled={feedbackStep === 'loading'}
+                  />
+                  <div className="flex gap-3 mt-4">
+                    <button onClick={closeFeedback} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 px-4 rounded-lg hover:bg-gray-50 transition-colors">
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={requestPreview}
+                      disabled={!feedbackText.trim() || feedbackStep === 'loading'}
+                      className="flex-1 bg-gradient-to-r from-primary-600 to-secondary-600 text-white text-sm font-medium py-2 px-4 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {feedbackStep === 'loading' ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          Generando preview...
+                        </>
+                      ) : 'Ver preview →'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* PASO 2: preview */}
+              {(feedbackStep === 'preview' || feedbackStep === 'done' || (feedbackStep === 'loading' && feedbackPreview)) && feedbackPreview && (
+                <>
+                  <div className="mb-4">
+                    <p className="text-xs font-medium text-gray-500 mb-2">Así respondería el agente con la corrección aplicada:</p>
+                    <div className="bg-[#dcf8c6] rounded-lg rounded-tr-none px-3 py-2.5 shadow-sm">
+                      <p className="text-[10px] text-primary-600 font-medium mb-0.5">Agente IA</p>
+                      <p className="text-sm text-gray-900 whitespace-pre-wrap">{feedbackPreview.previewResponse}</p>
+                    </div>
+                  </div>
+
+                  {feedbackStep === 'done' ? (
+                    <div className="flex items-center justify-center gap-2 py-2 text-green-600 font-medium text-sm">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                      </svg>
+                      Corrección aplicada al agente
+                    </div>
+                  ) : (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => { setFeedbackStep('write'); setFeedbackPreview(null); }}
+                        disabled={feedbackStep === 'loading'}
+                        className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 px-4 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        ← Ajustar
+                      </button>
+                      <button
+                        onClick={confirmFeedback}
+                        disabled={feedbackStep === 'loading'}
+                        className="flex-1 bg-gradient-to-r from-primary-600 to-secondary-600 text-white text-sm font-medium py-2 px-4 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {feedbackStep === 'loading' ? (
+                          <>
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Guardando...
+                          </>
+                        ) : 'Confirmar y aplicar ✓'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Area */}
       <div className={`${selectedConv ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-gray-50`}>
         {!selectedConv ? (
@@ -319,8 +523,23 @@ export default function ConversationsPage() {
                   const isImage = msg.type === 'image';
                   const imgSrc = msg.imageUrl || (msg.imageBase64 ? `data:${msg.imageMimeType || 'image/jpeg'};base64,${msg.imageBase64}` : null);
 
+                  const isBotMessage = isOutbound && msg.sender === 'bot';
+
                   return (
-                    <div key={msg.messageId} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                    <div key={msg.messageId} className={`flex ${isOutbound ? 'justify-end' : 'justify-start'} group`}>
+                      {/* Botón feedback — solo en mensajes del bot */}
+                      {isBotMessage && (
+                        <button
+                          onClick={() => setFeedbackTarget({ messageId: msg.messageId, content: msg.content })}
+                          className="self-end mb-2 mr-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 shadow-sm text-xs font-medium"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 15h2.25m8.024-9.75c.011.05.028.1.052.148.591 1.2.924 2.55.924 3.977a8.96 8.96 0 0 1-.999 4.125m.023-8.25c-.076-.365.183-.75.575-.75h.908c.889 0 1.713.518 1.972 1.368.339 1.11.521 2.287.521 3.507 0 1.553-.295 3.036-.831 4.398-.306.774-1.086 1.227-1.918 1.227h-1.053c-.472 0-.745-.556-.5-.96a8.95 8.95 0 0 0 .303-.54m.023-8.25H3.75l4.125 9m6.75-9L9.75 15" />
+                          </svg>
+                          Corregir
+                        </button>
+                      )}
+
                       <div className={`max-w-[75%] rounded-lg shadow-sm overflow-hidden ${
                         isOutbound
                           ? 'bg-[#dcf8c6] rounded-tr-none'
@@ -338,7 +557,7 @@ export default function ConversationsPage() {
 
                         {/* Texto */}
                         <div className="px-3 py-1.5">
-                          {msg.sender === 'bot' && isOutbound && !isImage && (
+                          {isBotMessage && !isImage && (
                             <p className="text-[10px] text-primary-600 font-medium mb-0.5">Agente IA</p>
                           )}
                           {msg.content && msg.content !== '[El cliente envio una imagen]' && (
