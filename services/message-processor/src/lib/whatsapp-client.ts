@@ -76,6 +76,29 @@ export async function sendWhatsAppImage(
   }).catch(err => console.error('sendWhatsAppImage error:', err));
 }
 
+export async function sendWahaMessage(
+  wahaUrl: string,
+  apiKey: string,
+  sessionName: string,
+  recipientPhone: string,
+  text: string,
+): Promise<void> {
+  const chatId = recipientPhone.includes('@') ? recipientPhone : `${recipientPhone}@c.us`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-Api-Key'] = apiKey;
+
+  const res = await fetch(`${wahaUrl}/api/sendText`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ chatId, text, session: sessionName }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`WAHA send failed (${res.status}): ${err}`);
+  }
+}
+
 export async function markAsRead(
   phoneNumberId: string,
   accessToken: string,

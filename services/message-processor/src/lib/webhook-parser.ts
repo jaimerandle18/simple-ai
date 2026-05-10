@@ -1,5 +1,5 @@
 /**
- * Parsea el payload del webhook de Meta WhatsApp Business API.
+ * Parsea el payload del webhook de Meta WhatsApp Business API y de WAHA.
  */
 
 export interface ParsedInboundMessage {
@@ -73,4 +73,44 @@ export function parseWhatsAppWebhook(body: any): ParseResult {
   if (messages.length > 0) return { kind: 'messages', messages };
   if (statuses.length > 0) return { kind: 'statuses', statuses };
   return { kind: 'unknown' };
+}
+
+// ─── WAHA ─────────────────────────────────────────────────────
+
+export interface ParsedWahaMessage {
+  sessionName: string;
+  tenantId: string;
+  senderPhone: string;
+  senderName: string;
+  waMessageId: string;
+  timestamp: string;
+  textBody: string;
+}
+
+/** Extrae tenantId del nombre de sesión: "tenant_<uuid>" → "<uuid>" */
+function tenantFromSession(session: string): string {
+  return session.startsWith('tenant_') ? session.slice('tenant_'.length) : session;
+}
+
+export function parseWahaWebhook(body: any): ParsedWahaMessage | null {
+  if (body.event !== 'message' || !body.payload) return null;
+
+  const p = body.payload;
+  if (p.fromMe) return null; // ignorar mensajes propios
+  // Solo procesar mensajes de texto (type "chat" en WAHA)
+  if (p.type && p.type !== 'chat') return null;
+  if (!p.body) return null;
+
+  const senderPhone = (p.from || '').replace(/@c\.us$/, '').replace(/@g\.us$/, '');
+  const sessionName = body.session || '';
+
+  return {
+    sessionName,
+    tenantId: tenantFromSession(sessionName),
+    senderPhone,
+    senderName: p._data?.notifyName || senderPhone,
+    waMessageId: p.id || `waha_${Date.now()}`,
+    timestamp: String(p.timestamp || Math.floor(Date.now() / 1000)),
+    textBody: p.body,
+  };
 }

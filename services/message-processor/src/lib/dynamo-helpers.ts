@@ -10,6 +10,7 @@ export const TABLE_NAME = process.env.TABLE_NAME!;
 export const keys = {
   tenant: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'META#config' }),
   channel: (tenantId: string, phoneNumberId: string) => ({ PK: `TENANT#${tenantId}`, SK: `CHANNEL#wa#${phoneNumberId}` }),
+  wahaChannel: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'CHANNEL#waha#main' }),
   conversation: (tenantId: string, convId: string) => ({ PK: `TENANT#${tenantId}`, SK: `CONV#${convId}` }),
   message: (convId: string, timestamp: string, messageId: string) => ({ PK: `CONV#${convId}`, SK: `MSG#${timestamp}#${messageId}` }),
   contact: (tenantId: string, phone: string) => ({ PK: `TENANT#${tenantId}`, SK: `CONTACT#${phone}` }),

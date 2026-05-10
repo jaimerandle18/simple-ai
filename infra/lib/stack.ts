@@ -165,6 +165,9 @@ export class SimpleAiStack extends cdk.Stack {
       integration: new apigatewayv2Integrations.HttpLambdaIntegration('ApiIntegration', apiLambda),
     });
 
+    // Inyectar la URL del API Gateway en el Lambda de API (para que WAHA sepa dónde mandar webhooks)
+    apiLambda.addEnvironment('API_BASE_URL', (httpApi.url ?? '').replace(/\/$/, ''));
+
     // ========== Outputs ==========
     new cdk.CfnOutput(this, 'ApiUrl', { value: httpApi.url ?? '' });
     new cdk.CfnOutput(this, 'TableName', { value: table.tableName });

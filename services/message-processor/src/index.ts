@@ -3,8 +3,8 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { getItem, putItem, queryItems, queryByGSI, keys } from './lib/dynamo-helpers';
-import { parseWhatsAppWebhook, ParsedInboundMessage, ParsedStatusUpdate } from './lib/webhook-parser';
-import { sendWhatsAppMessage, sendWhatsAppImage, markAsRead } from './lib/whatsapp-client';
+import { parseWhatsAppWebhook, parseWahaWebhook, ParsedInboundMessage, ParsedStatusUpdate, ParsedWahaMessage } from './lib/webhook-parser';
+import { sendWhatsAppMessage, sendWhatsAppImage, sendWahaMessage, markAsRead } from './lib/whatsapp-client';
 import { loadCatalog } from './lib/catalog-loader';
 import { cleanMarkdownForWhatsApp } from './lib/markdown-cleaner';
 import type { EnrichedProduct } from './lib/types';
@@ -503,6 +503,9 @@ export const handler = async (event: SQSEvent): Promise<void> => {
           await processStatusUpdate(status);
         }
       }
+    } else if (body.event === 'message' && body.session) {
+      const msg = parseWahaWebhook(body);
+      if (msg) await processWahaMessage(msg);
     }
   }
 };
@@ -851,6 +854,169 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
     console.error('Pipeline error:', err);
     recordFailure();
     await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, getFallbackMessage());
+  }
+}
+
+// ============================================================
+// WAHA: mensaje entrante
+// ============================================================
+async function processWahaMessage(msg: ParsedWahaMessage) {
+  console.log(`[WAHA] Inbound from ${msg.senderPhone}: ${msg.textBody.slice(0, 80)}`);
+
+  const { tenantId, sessionName, senderPhone, senderName, waMessageId, textBody } = msg;
+
+  // 1. Leer config del canal WAHA
+  const wahaChannel = await getItem(keys.wahaChannel(tenantId));
+  if (!wahaChannel?.wahaUrl || !wahaChannel.active) {
+    console.error(`[WAHA] No active channel for tenant ${tenantId}`);
+    return;
+  }
+  const { wahaUrl, apiKey } = wahaChannel as { wahaUrl: string; apiKey: string };
+
+  const sendReply = (text: string) => sendWahaMessage(wahaUrl, apiKey, sessionName, senderPhone, text);
+
+  // 2. Deduplicación
+  const existingMsgs = await queryItems(`WAMSG#${waMessageId}`);
+  if (existingMsgs.length > 0) { console.log(`[WAHA] Dup ${waMessageId}`); return; }
+
+  const now = new Date().toISOString();
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // 3. Contacto
+  const contactKey = keys.contact(tenantId, senderPhone);
+  const existingContact = await getItem(contactKey);
+  await putItem({
+    ...contactKey,
+    phone: senderPhone,
+    contactPhone: senderPhone,
+    name: senderName || existingContact?.name || senderPhone,
+    tags: existingContact?.tags || [],
+    totalConversations: (existingContact?.totalConversations as number || 0) + (existingContact ? 0 : 1),
+    lastConversationAt: now,
+    createdAt: existingContact?.createdAt || now,
+    tenantId,
+  });
+
+  // 4. Conversación
+  const contactConvs = await queryByGSI('byContactPhone', 'contactPhone', senderPhone);
+  const conversation = contactConvs.find(
+    (c: any) => c.PK === `TENANT#${tenantId}` && c.SK?.startsWith('CONV#') && c.status !== 'archived'
+  );
+  const conversationId = conversation?.conversationId || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // 5. Guardar mensaje entrante
+  await putItem({
+    ...keys.message(conversationId, now, msgId),
+    messageId: msgId, conversationId, tenantId,
+    direction: 'inbound', sender: 'contact', type: 'text',
+    content: textBody, waMessageId, timestamp: now,
+  });
+  await putItem({ PK: `WAMSG#${waMessageId}`, SK: 'MAP', conversationId, messageId: msgId, timestamp: now });
+
+  // 6. Actualizar conversación
+  const unreadCount = (conversation?.unreadCount as number || 0) + 1;
+  await putItem({
+    ...keys.conversation(tenantId, conversationId),
+    conversationId, tenantId, channelPhoneNumberId: sessionName,
+    contactPhone: senderPhone,
+    contactName: senderName || conversation?.contactName || senderPhone,
+    status: 'open', tags: conversation?.tags || [],
+    assignedTo: conversation?.assignedTo || 'bot',
+    unreadCount, lastMessageAt: now,
+    lastMessagePreview: textBody.slice(0, 100),
+    createdAt: conversation?.createdAt || now,
+  });
+
+  // 7. Guards
+  const rateCheck = await checkRateLimit(senderPhone);
+  if (!rateCheck.allowed) { await sendReply(rateCheck.message!); return; }
+  if (detectInjection(textBody)) { await sendReply(INJECTION_RESPONSE); return; }
+  if (isCircuitOpen()) { await sendReply(getFallbackMessage()); return; }
+
+  // 8. Si asignado a humano, no responder
+  if ((conversation?.assignedTo || 'bot') !== 'bot') return;
+
+  // 9. Debounce 3s
+  const msgTimestamp = Date.now();
+  await putItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST', timestamp: msgTimestamp, ttl: Math.floor(Date.now() / 1000) + 60 });
+  await new Promise(r => setTimeout(r, 3000));
+  const debounceItem = await getItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST' });
+  if (debounceItem && (debounceItem.timestamp as number) !== msgTimestamp) return;
+
+  // 10. Juntar mensajes pendientes
+  const recentMsgs = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
+  recentMsgs.reverse();
+  let lastBotIdx = -1;
+  for (let i = recentMsgs.length - 1; i >= 0; i--) {
+    if ((recentMsgs[i] as any).sender === 'bot') { lastBotIdx = i; break; }
+  }
+  const pendingInbound = recentMsgs.slice(lastBotIdx + 1).filter((m: any) => m.direction === 'inbound').map((m: any) => m.content as string);
+  const combinedMessage = pendingInbound.length > 0 ? pendingInbound.join('. ') : textBody;
+
+  const freshConv = await getItem(keys.conversation(tenantId, conversationId));
+  if (freshConv?.assignedTo && freshConv.assignedTo !== 'bot') return;
+
+  // 11. Comando /reset
+  if (combinedMessage.trim().toLowerCase() === '/reset') {
+    const resetMsg = 'Conversación reiniciada. ¡Hola! Contame qué buscás.';
+    await sendReply(resetMsg);
+    const resetNow = new Date().toISOString();
+    const resetId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await putItem({ ...keys.message(conversationId, resetNow, resetId), messageId: resetId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: resetMsg, status: 'sent', timestamp: resetNow });
+    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: sessionName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: resetNow, lastMessagePreview: resetMsg, createdAt: conversation?.createdAt || now, convState: { recentProducts: [] } });
+    return;
+  }
+
+  // 12. Config del agente
+  const agent = await getItem(keys.agent(tenantId, 'main'));
+  if (!agent?.active) return;
+
+  // 13. Pipeline
+  try {
+    const agentCfg = agent.agentConfig || agent;
+    const catalog = await loadCatalog(tenantId);
+    let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
+
+    const trivial = isTrivialMessage(combinedMessage);
+    const hasRecent = recentProducts.length > 0;
+    const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentProducts.map((p: any) => p.name));
+    if (trivial && /^(hola|holaa+|hi|hey|buenas)/i.test(combinedMessage.trim())) recentProducts = [];
+
+    const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
+    const contextOnly = dedupProducts(recentProducts).slice(0, 6);
+    const freshOnly = dedupProducts(newProducts).slice(0, 4);
+
+    const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
+    historyItems.reverse();
+    const history: Anthropic.MessageParam[] = [];
+    for (const item of historyItems) {
+      const role = (item as any).direction === 'inbound' ? 'user' : 'assistant';
+      const content = (item as any).content as string;
+      if (history.length > 0 && history[history.length - 1].role === role) {
+        (history[history.length - 1].content as string);
+        history[history.length - 1] = { role, content: (history[history.length - 1].content as string) + '\n' + content };
+      } else {
+        history.push({ role, content });
+      }
+    }
+    if (history.length > 0 && history[0].role === 'assistant') history.shift();
+
+    const { text: aiResponse, productsShown } = await generateResponse(combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg, undefined);
+    recordSuccess();
+
+    const cleanResponse = cleanMarkdownForWhatsApp(aiResponse);
+    await sendReply(cleanResponse);
+
+    const replyNow = new Date().toISOString();
+    const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await putItem({ ...keys.message(conversationId, replyNow, replyId), messageId: replyId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: cleanResponse, status: 'sent', timestamp: replyNow });
+    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: sessionName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: conversation?.tags || [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100), createdAt: conversation?.createdAt || now, convState: { recentProducts: dedupProducts(productsShown).slice(0, 8) } });
+
+    console.log(`[WAHA] Done (${Date.now() - msgTimestamp}ms)`);
+  } catch (err) {
+    console.error('[WAHA] Pipeline error:', err);
+    recordFailure();
+    await sendReply(getFallbackMessage());
   }
 }
 
