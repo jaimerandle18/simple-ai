@@ -89,11 +89,14 @@ export class SimpleAiStack extends cdk.Stack {
       'curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose',
       'chmod +x /usr/local/lib/docker/cli-plugins/docker-compose',
       'mkdir -p /opt/waha',
+      `docker login -u devlikeapro -p ${process.env.DOCKER_HUB_TOKEN || ''}`,
+      'docker pull devlikeapro/waha-plus:latest',
+      'docker logout',
       `cat > /opt/waha/docker-compose.yml << 'COMPOSE'
 version: '3'
 services:
   waha:
-    image: devlikeapro/waha:noweb
+    image: devlikeapro/waha-plus:latest
     ports:
       - "3000:3000"
     environment:

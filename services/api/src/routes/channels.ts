@@ -11,14 +11,14 @@ async function wahaFetch(baseUrl: string, apiKey: string, path: string, options:
   return fetch(`${baseUrl}${path}`, { ...options, headers });
 }
 
-const SESSION = 'default';
-
 export async function handleChannels(event: APIGatewayProxyEventV2) {
   const path = event.requestContext.http.path;
   const method = event.requestContext.http.method;
   const tenantId = event.headers['x-tenant-id'];
 
   if (!tenantId) return error('x-tenant-id header required', 401);
+
+  const SESSION = `tenant_${tenantId}`;
 
   // GET /channels
   if (method === 'GET' && path === '/channels') {
