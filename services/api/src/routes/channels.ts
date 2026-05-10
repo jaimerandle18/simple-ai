@@ -2,11 +2,16 @@ import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
 
-async function wahaFetch(wahaUrl: string, apiKey: string, path: string, options: RequestInit = {}) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(options.headers as any || {}) };
-  if (apiKey) headers['X-Api-Key'] = apiKey;
-  return fetch(`${wahaUrl}${path}`, { ...options, headers });
+async function wahaFetch(baseUrl: string, apiKey: string, path: string, options: RequestInit = {}) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(apiKey ? { 'X-Api-Key': apiKey } : {}),
+    ...(options.headers as any || {}),
+  };
+  return fetch(`${baseUrl}${path}`, { ...options, headers });
 }
+
+const SESSION = 'default';
 
 export async function handleChannels(event: APIGatewayProxyEventV2) {
   const path = event.requestContext.http.path;
@@ -15,13 +20,13 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
 
   if (!tenantId) return error('x-tenant-id header required', 401);
 
-  // GET /channels — listar canales del tenant
+  // GET /channels
   if (method === 'GET' && path === '/channels') {
     const channels = await queryItems(`TENANT#${tenantId}`, 'CHANNEL#', { limit: 10 });
     return json(channels);
   }
 
-  // PUT /channels/whatsapp — guardar/actualizar canal de WhatsApp
+  // PUT /channels/whatsapp
   if (method === 'PUT' && path === '/channels/whatsapp') {
     const body = JSON.parse(event.body || '{}');
     const { phoneNumberId, phoneNumber, displayName, accessToken, wabaId } = body;
@@ -52,7 +57,7 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     return json(channel);
   }
 
-  // DELETE /channels/whatsapp/:phoneNumberId — desactivar canal
+  // DELETE /channels/whatsapp/:phoneNumberId
   const deleteMatch = path.match(/^\/channels\/whatsapp\/([^/]+)$/);
   if (method === 'DELETE' && deleteMatch) {
     const phoneNumberId = deleteMatch[1];
@@ -62,39 +67,39 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     return json({ ok: true });
   }
 
-  // ─── WAHA routes ───────────────────────────────────────────
+  // ─── WAHA routes ────────────────────────────────────────────
 
-  // GET /channels/waha — leer configuración guardada
+  // GET /channels/waha
   if (method === 'GET' && path === '/channels/waha') {
     const config = await getItem(keys.wahaChannel(tenantId));
     return json(config || null);
   }
 
-  // PUT /channels/waha — iniciar sesión (URL y key vienen de env vars)
+  // PUT /channels/waha — crear/iniciar sesión en WAHA
   if (method === 'PUT' && path === '/channels/waha') {
     const base = (process.env.WAHA_URL || '').replace(/\/$/, '');
     const apiKey = process.env.WAHA_API_KEY || '';
-    if (!base) return error('WAHA_URL no configurado en el servidor', 503);
+    if (!base) return error('WAHA_URL no configurado', 503);
 
-    const sessionName = `tenant_${tenantId}`;
     const apiBase = (process.env.API_BASE_URL || '').replace(/\/$/, '');
     const webhookUrl = apiBase ? `${apiBase}/webhook` : '';
 
-    // Crear/iniciar sesión en WAHA con engine NOWEB
-    const sessionBody: any = { name: sessionName, engine: 'NOWEB' };
-    if (webhookUrl) {
-      sessionBody.config = { webhooks: [{ url: webhookUrl, events: ['message'] }] };
-    }
-
-    const res = await wahaFetch(base, apiKey, '/api/sessions', {
+    const createRes = await wahaFetch(base, apiKey, '/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(sessionBody),
+      body: JSON.stringify({
+        name: SESSION,
+        config: {
+          webhooks: webhookUrl ? [{ url: webhookUrl, events: ['message'] }] : [],
+        },
+      }),
     });
 
-    // 201 = creado, 422/409 = ya existe — ambos son ok
-    if (!res.ok && res.status !== 422 && res.status !== 409) {
-      const err = await res.text();
-      return error(`WAHA error (${res.status}): ${err}`, 502);
+    if (createRes.status === 422 || createRes.status === 409) {
+      // Sesión ya existe — asegurarse de que esté iniciada
+      await wahaFetch(base, apiKey, `/api/sessions/${SESSION}/start`, { method: 'POST' });
+    } else if (!createRes.ok) {
+      const err = await createRes.text();
+      return error(`WAHA error (${createRes.status}): ${err}`, 502);
     }
 
     const now = new Date().toISOString();
@@ -103,25 +108,25 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
       ...keys.wahaChannel(tenantId),
       tenantId,
       platform: 'waha',
-      sessionName,
+      sessionName: SESSION,
       active: true,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
     await putItem(channel);
+
+    // Reverse lookup: session → tenantId (para routing de webhooks)
+    await putItem({
+      PK: `WAHA_SESSION#${SESSION}`,
+      SK: 'OWNER',
+      tenantId,
+      updatedAt: now,
+    });
+
     return json(channel);
   }
 
-  // Helper: leer WAHA config de env vars + sessionName de DynamoDB
-  function getWahaConn(sessionName: string) {
-    return {
-      base: (process.env.WAHA_URL || '').replace(/\/$/, ''),
-      apiKey: process.env.WAHA_API_KEY || '',
-      sessionName,
-    };
-  }
-
-  // GET /channels/waha/status — estado de la sesión en WAHA
+  // GET /channels/waha/status
   if (method === 'GET' && path === '/channels/waha/status') {
     const base = (process.env.WAHA_URL || '').replace(/\/$/, '');
     if (!base) return json({ status: 'NOT_CONFIGURED' });
@@ -129,9 +134,8 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     const record = await getItem(keys.wahaChannel(tenantId));
     if (!record?.sessionName) return json({ status: 'NOT_CONFIGURED' });
 
-    const { apiKey, sessionName } = getWahaConn(record.sessionName as string);
     try {
-      const res = await wahaFetch(base, apiKey, `/api/sessions/${sessionName}`);
+      const res = await wahaFetch(base, process.env.WAHA_API_KEY || '', `/api/sessions/${SESSION}`);
       if (!res.ok) return json({ status: 'STOPPED' });
       const data: any = await res.json();
       return json({ status: data.status || 'STOPPED' });
@@ -140,36 +144,39 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     }
   }
 
-  // GET /channels/waha/qr — QR code como data URL base64
+  // GET /channels/waha/qr
   if (method === 'GET' && path === '/channels/waha/qr') {
     const base = (process.env.WAHA_URL || '').replace(/\/$/, '');
-    if (!base) return error('WAHA not configured', 503);
+    if (!base) return error('WAHA no configurado', 503);
 
     const record = await getItem(keys.wahaChannel(tenantId));
-    if (!record?.sessionName) return error('Session not started', 404);
+    if (!record?.sessionName) return error('Sesión no iniciada', 404);
 
-    const { apiKey, sessionName } = getWahaConn(record.sessionName as string);
     try {
-      const res = await wahaFetch(base, apiKey,
-        `/api/${sessionName}/auth/qr`, { headers: { Accept: 'image/png' } as any });
-      if (!res.ok) return error('QR not available', 404);
-      const buffer = await res.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString('base64');
-      return json({ qr: `data:image/png;base64,${base64}` });
+      const res = await wahaFetch(base, process.env.WAHA_API_KEY || '', `/api/${SESSION}/auth/qr`, {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!res.ok) return error('QR no disponible', 404);
+      const data: any = await res.json();
+      const b64 = data?.data;
+      if (!b64) return error('QR no disponible', 404);
+      const qr = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+      return json({ qr });
     } catch {
-      return error('QR not available', 404);
+      return error('QR no disponible', 404);
     }
   }
 
-  // DELETE /channels/waha — detener sesión y desactivar
+  // DELETE /channels/waha
   if (method === 'DELETE' && path === '/channels/waha') {
     const base = (process.env.WAHA_URL || '').replace(/\/$/, '');
     const record = await getItem(keys.wahaChannel(tenantId));
-    if (!record?.sessionName) return error('Session not found', 404);
+    if (!record?.sessionName) return error('Sesión no encontrada', 404);
 
-    const { apiKey, sessionName } = getWahaConn(record.sessionName as string);
+    const apiKey = process.env.WAHA_API_KEY || '';
+
     if (base) {
-      await wahaFetch(base, apiKey, `/api/sessions/${sessionName}`, { method: 'DELETE' }).catch(() => {});
+      await wahaFetch(base, apiKey, `/api/sessions/${SESSION}`, { method: 'DELETE' }).catch(() => {});
     }
     await putItem({ ...record, active: false });
     return json({ ok: true });

@@ -7,10 +7,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as ecsPatterns from 'aws-cdk-lib/aws-ecs-patterns';
-import * as efs from 'aws-cdk-lib/aws-efs';
-import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -23,7 +20,7 @@ export class SimpleAiStack extends cdk.Stack {
     super(scope, id, props);
 
     const stage = props.stageName;
-    const wahaApiKey = process.env.WAHA_API_KEY || 'simple-ai-waha-secret';
+    const wahaApiKey = process.env.WAHA_API_KEY || 'simple-ai-waha-key';
 
     // ========== DynamoDB (single-table) ==========
     const table = new dynamodb.Table(this, 'MainTable', {
@@ -69,122 +66,66 @@ export class SimpleAiStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(120),
     });
 
-    // ========== VPC (solo subnets públicas, sin NAT Gateway) ==========
-    const vpc = new ec2.Vpc(this, 'Vpc', {
-      vpcName: `simple-ai-${stage}`,
-      maxAzs: 2,
-      natGateways: 0,
-      subnetConfiguration: [
-        { name: 'public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
-      ],
-    });
+    // ========== EC2: Evolution API ==========
 
-    // ========== EFS para sesiones WAHA (persiste tras reinicios) ==========
-    const wahaEfs = new efs.FileSystem(this, 'WahaEfs', {
+    // Use default VPC
+    const vpc = ec2.Vpc.fromLookup(this, 'DefaultVpc', { isDefault: true });
+
+    const evolutionSg = new ec2.SecurityGroup(this, 'EvolutionSg', {
       vpc,
-      fileSystemName: `simple-ai-waha-${stage}`,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.BURSTING,
+      description: 'Evolution API',
+      allowAllOutbound: true,
     });
+    evolutionSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(3000), 'WAHA API');
+    evolutionSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'SSH');
 
-    const wahaAccessPoint = wahaEfs.addAccessPoint('WahaAP', {
-      path: '/sessions',
-      createAcl: { ownerGid: '1000', ownerUid: '1000', permissions: '755' },
-      posixUser: { gid: '1000', uid: '1000' },
-    });
+    const userData = ec2.UserData.forLinux();
+    userData.addCommands(
+      'yum update -y',
+      'yum install -y docker',
+      'systemctl start docker',
+      'systemctl enable docker',
+      'mkdir -p /usr/local/lib/docker/cli-plugins',
+      'curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose',
+      'chmod +x /usr/local/lib/docker/cli-plugins/docker-compose',
+      'mkdir -p /opt/waha',
+      `cat > /opt/waha/docker-compose.yml << 'COMPOSE'
+version: '3'
+services:
+  waha:
+    image: devlikeapro/waha:noweb
+    ports:
+      - "3000:3000"
+    environment:
+      WHATSAPP_API_KEY: ${wahaApiKey}
+    restart: always
+COMPOSE`,
+      'cd /opt/waha && docker compose up -d'
+    );
 
-    // ========== ECS Cluster ==========
-    const cluster = new ecs.Cluster(this, 'WahaCluster', {
+    const evolutionInstance = new ec2.Instance(this, 'WahaInstance', {
       vpc,
-      clusterName: `simple-ai-waha-${stage}`,
-    });
-
-    // ========== Task Definition ==========
-    const wahaTaskDef = new ecs.FargateTaskDefinition(this, 'WahaTaskDef', {
-      family: `simple-ai-waha-${stage}`,
-      memoryLimitMiB: 512,
-      cpu: 256,
-    });
-
-    wahaTaskDef.addVolume({
-      name: 'waha-sessions',
-      efsVolumeConfiguration: {
-        fileSystemId: wahaEfs.fileSystemId,
-        transitEncryption: 'ENABLED',
-        authorizationConfig: {
-          accessPointId: wahaAccessPoint.accessPointId,
-          iam: 'ENABLED',
-        },
-      },
-    });
-
-    wahaEfs.grantRootAccess(wahaTaskDef.taskRole);
-
-    const wahaLogGroup = new logs.LogGroup(this, 'WahaLogGroup', {
-      logGroupName: `/ecs/simple-ai-waha-${stage}`,
-      retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    const wahaContainer = wahaTaskDef.addContainer('waha', {
-      // devlikeapro/waha incluye el engine NOWEB desde v2023+
-      image: ecs.ContainerImage.fromRegistry('devlikeapro/waha'),
-      environment: {
-        WHATSAPP_API_KEY: wahaApiKey,
-        WHATSAPP_DEFAULT_ENGINE: 'NOWEB',
-        WHATSAPP_SESSIONS_PATH: '/app/.waha/sessions',
-      },
-      logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: 'waha',
-        logGroup: wahaLogGroup,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      securityGroup: evolutionSg,
+      userData,
+      userDataCausesReplacement: true,
+      role: new iam.Role(this, 'EvolutionInstanceRole', {
+        assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+        managedPolicies: [
+          iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+        ],
       }),
-      portMappings: [{ containerPort: 3000 }],
-      healthCheck: {
-        command: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1'],
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(10),
-        retries: 3,
-        startPeriod: cdk.Duration.seconds(90),
-      },
     });
 
-    wahaContainer.addMountPoints({
-      sourceVolume: 'waha-sessions',
-      containerPath: '/app/.waha/sessions',
-      readOnly: false,
+    const eip = new ec2.CfnEIP(this, 'EvolutionEIP', { domain: 'vpc' });
+    new ec2.CfnEIPAssociation(this, 'EvolutionEIPAssoc', {
+      allocationId: eip.attrAllocationId,
+      instanceId: evolutionInstance.instanceId,
     });
 
-    // ========== Fargate Service + ALB ==========
-    const wahaService = new ecsPatterns.ApplicationLoadBalancedFargateService(this, 'WahaService', {
-      cluster,
-      taskDefinition: wahaTaskDef,
-      serviceName: `simple-ai-waha-${stage}`,
-      desiredCount: 1,
-      publicLoadBalancer: true,
-      assignPublicIp: true,
-      taskSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-      listenerPort: 80,
-      healthCheckGracePeriod: cdk.Duration.seconds(120),
-    });
-
-    // EFS accesible desde el servicio Fargate
-    wahaEfs.connections.allowDefaultPortFrom(wahaService.service.connections);
-
-    // ALB health check
-    wahaService.targetGroup.configureHealthCheck({
-      path: '/',
-      healthyHttpCodes: '200-401', // WAHA devuelve 401 sin auth key — es válido, el servidor está up
-      interval: cdk.Duration.seconds(30),
-      timeout: cdk.Duration.seconds(10),
-      healthyThresholdCount: 2,
-      unhealthyThresholdCount: 5,
-    });
-
-    // Reducir tiempo de drenado (el servicio es stateless por fuera de WAHA)
-    wahaService.targetGroup.setAttribute('deregistration_delay.timeout_seconds', '10');
-
-    const wahaUrl = `http://${wahaService.loadBalancer.loadBalancerDnsName}`;
+    const wahaUrl = `http://${eip.ref}:3000`;
     new cdk.CfnOutput(this, 'WahaUrl', { value: wahaUrl });
 
     // ========== Lambdas ==========
