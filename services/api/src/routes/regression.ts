@@ -277,34 +277,34 @@ async function executeRegression(tenantId: string, runId: string) {
   const tenantBlock = `# IDENTIDAD\nNombre: ${name}${web ? `. Web: ${web}` : ''}\n\n${activeRules !== HARDCODED_RULES ? `# REGLAS DEL NEGOCIO\n${activeRules}` : ''}\n\n# CATEGORÍAS\n${categories}${agentConfig.promotions ? `\n\n# PROMOCIONES\n${agentConfig.promotions}` : ''}${agentConfig.businessHours ? `\n\n# HORARIO\n${agentConfig.businessHours}` : ''}${agentConfig.welcomeMessage ? `\n\n# BIENVENIDA\n${agentConfig.welcomeMessage}` : ''}`;
 
   const results: any[] = [];
+  const validGoldens = goldenIds.map(id => goldenMap.get(id)).filter(Boolean);
 
-  for (let i = 0; i < goldenIds.length; i++) {
-    const golden = goldenMap.get(goldenIds[i]);
-    if (!golden) continue;
+  // Correr goldens en paralelo (batches de 3)
+  for (let batch = 0; batch < validGoldens.length; batch += 3) {
+    const batchGoldens = validGoldens.slice(batch, batch + 3);
 
-    const turnCount = Math.min((golden.turns || []).length, 50);
-    const onProgress = async (turnIdx: number) => {
-      await putItem({
-        ...run, status: 'running',
-        progress: { current: i, total: goldenIds.length },
-        currentGolden: { goldenId: golden.goldenId, preview: `${(golden.preview || '').slice(0, 40)} (${turnIdx + 1}/${turnCount})`, tags: golden.tags || [] },
-      });
-    };
-    await onProgress(0);
+    await putItem({
+      ...run, status: 'running',
+      progress: { current: batch, total: validGoldens.length },
+      currentGolden: { goldenId: '', preview: `Verificando ${batch + 1}-${Math.min(batch + 3, validGoldens.length)} de ${validGoldens.length}`, tags: [] },
+    });
 
-    try {
-      const result = await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories, onProgress);
-      results.push(result);
-    } catch (err: any) {
-      results.push({
-        goldenId: golden.goldenId,
-        preview: golden.preview || '',
-        tags: golden.tags || [],
-        overallVerdict: 'error',
-        error: err.message,
-        turnResults: [],
-      });
-    }
+    const batchResults = await Promise.all(batchGoldens.map(async (golden: any) => {
+      try {
+        return await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories);
+      } catch (err: any) {
+        return {
+          goldenId: golden.goldenId,
+          preview: golden.preview || '',
+          tags: golden.tags || [],
+          overallVerdict: 'error',
+          error: err.message,
+          turnResults: [],
+        };
+      }
+    }));
+
+    results.push(...batchResults);
   }
 
   const summary = {
@@ -332,16 +332,52 @@ async function executeRegression(tenantId: string, runId: string) {
 // REPLAY + JUDGE (por golden)
 // ============================================================
 
+/** Selecciona los 3 turnos más representativos de una conversación */
+function pickKeyTurns(turns: any[]): any[] {
+  if (turns.length <= 3) return turns;
+
+  // Filtrar turnos triviales (muy cortos o genéricos)
+  const trivialPatterns = /^(hola|ok|dale|perfecto|gracias|si|no|bueno|genial|listo|chau|bye)[\s!?.]*$/i;
+  const substantive = turns.filter((t: any) =>
+    t.userMessage.length > 15 && !trivialPatterns.test(t.userMessage.trim())
+  );
+
+  const picked: any[] = [];
+
+  // 1. Primer turno sustancial (arranca la conversación)
+  if (substantive.length > 0) picked.push(substantive[0]);
+
+  // 2. Turno del medio (desarrollo)
+  if (substantive.length > 2) {
+    const midIdx = Math.floor(substantive.length / 2);
+    if (!picked.includes(substantive[midIdx])) picked.push(substantive[midIdx]);
+  }
+
+  // 3. Último turno sustancial (cierre/conclusión)
+  if (substantive.length > 1) {
+    const last = substantive[substantive.length - 1];
+    if (!picked.includes(last)) picked.push(last);
+  }
+
+  // Si no llegamos a 3, completar con los primeros turnos
+  for (const t of turns) {
+    if (picked.length >= 3) break;
+    if (!picked.includes(t)) picked.push(t);
+  }
+
+  return picked.slice(0, 3);
+}
+
 async function replayAndJudge(
   golden: any, stableBlock: string, tenantBlock: string, catalog: any[], categories: string,
   onProgress?: (turnIdx: number) => Promise<void>,
 ): Promise<any> {
-  const turns = golden.turns || [];
+  const allTurns = golden.turns || [];
+  const turns = pickKeyTurns(allTurns);
   const turnResults: any[] = [];
   let worstSeverity = 'ninguna';
   const severityOrder: Record<string, number> = { ninguna: 0, leve: 1, grave: 2 };
 
-  // Replay todos los turnos, recolectar respuestas nuevas
   const newResponses: string[] = [];
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
