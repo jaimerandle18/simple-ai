@@ -60,34 +60,23 @@ export function VerificationBanner() {
     });
   };
 
-  if (!show || dismissed) return null;
+  // Solo mostrar si NO hay goldens (para que guarde conversaciones tipo)
+  // Si hay goldens, la verificación ya es automática al confirmar cambios
+  if (!show || dismissed || hasGoldens) return null;
 
   return (
     <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 text-sm text-amber-800">
         <span className="text-amber-500 text-lg">&#9888;</span>
-        {hasGoldens ? (
-          <span>Hay cambios en el agente sin verificar.</span>
-        ) : (
-          <span>Cambiaste la configuracion del agente. Guarda conversaciones de referencia para poder verificar que todo funcione.</span>
-        )}
+        <span>Guarda conversaciones tipo para que los cambios se verifiquen automaticamente.</span>
       </div>
       <div className="flex items-center gap-2">
-        {hasGoldens ? (
-          <Link
-            href="/dashboard/golden"
-            className="text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition whitespace-nowrap"
-          >
-            Verificar ahora
-          </Link>
-        ) : (
-          <Link
-            href="/dashboard/conversations"
-            className="text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition whitespace-nowrap"
-          >
-            Ir a conversaciones
-          </Link>
-        )}
+        <Link
+          href="/dashboard/golden"
+          className="text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition whitespace-nowrap"
+        >
+          Ver como
+        </Link>
         <button
           onClick={() => setDismissed(true)}
           className="text-amber-400 hover:text-amber-600 text-lg leading-none"

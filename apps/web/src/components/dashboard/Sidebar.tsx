@@ -11,7 +11,7 @@ const navItems = [
   { href: '/dashboard/agent', label: 'Catalogo', icon: BotIcon },
   { href: '/dashboard/onboarding', label: 'Configurar agente', icon: OnboardingIcon },
   { href: '/dashboard/contacts', label: 'Contactos', icon: ContactsIcon },
-  { href: '/dashboard/golden', label: 'Verificar cambios', icon: GoldenIcon },
+  { href: '/dashboard/golden', label: 'Conversaciones tipo', icon: GoldenIcon },
   { href: '/dashboard/metrics', label: 'Metricas', icon: ChartIcon },
   { href: '/dashboard/payments', label: 'Pagos', icon: PaymentsIcon },
   { href: '/dashboard/settings', label: 'Configuracion', icon: SettingsIcon },
