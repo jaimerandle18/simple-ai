@@ -275,9 +275,18 @@ async function replayAndJudge(golden: any, systemPrompt: string): Promise<any> {
   let worstSeverity = 'ninguna';
   const severityOrder: Record<string, number> = { ninguna: 0, leve: 1, grave: 2 };
 
-  const history: Anthropic.MessageParam[] = [];
+  // Usar historial ORIGINAL como contexto para que cada turno tenga el mismo
+  // contexto que la conversación real. Solo el turno actual se regenera.
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
 
-  for (const turn of turns) {
+    // Armar historial con todos los turnos ORIGINALES anteriores
+    const history: Anthropic.MessageParam[] = [];
+    for (let j = 0; j < i; j++) {
+      history.push({ role: 'user', content: turns[j].userMessage });
+      history.push({ role: 'assistant', content: turns[j].botResponse });
+    }
+
     let newResponse = '';
     try {
       const res = await anthropic.messages.create({
@@ -304,9 +313,6 @@ async function replayAndJudge(golden: any, systemPrompt: string): Promise<any> {
       newResponse,
       judgement,
     });
-
-    history.push({ role: 'user', content: turn.userMessage });
-    history.push({ role: 'assistant', content: newResponse });
   }
 
   const overallVerdict = worstSeverity === 'grave' ? 'failed'
