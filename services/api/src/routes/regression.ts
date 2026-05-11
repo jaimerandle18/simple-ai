@@ -291,7 +291,7 @@ async function executeRegression(tenantId: string, runId: string) {
 
     const batchResults = await Promise.all(batchGoldens.map(async (golden: any) => {
       try {
-        return await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories);
+        return await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories, undefined, run.newPrompt);
       } catch (err: any) {
         return {
           goldenId: golden.goldenId,
@@ -371,6 +371,7 @@ function pickKeyTurns(turns: any[]): any[] {
 async function replayAndJudge(
   golden: any, stableBlock: string, tenantBlock: string, catalog: any[], categories: string,
   onProgress?: (turnIdx: number) => Promise<void>,
+  changeContext?: string,
 ): Promise<any> {
   const allTurns = golden.turns || [];
   const turns = pickKeyTurns(allTurns);
@@ -450,7 +451,7 @@ async function replayAndJudge(
   for (let batch = 0; batch < newResponses.length; batch += 5) {
     const batchPromises = [];
     for (let j = batch; j < Math.min(batch + 5, newResponses.length); j++) {
-      batchPromises.push(judgeTurn(turns[j].userMessage, turns[j].botResponse, newResponses[j]));
+      batchPromises.push(judgeTurn(turns[j].userMessage, turns[j].botResponse, newResponses[j], changeContext));
     }
     const batchResults = await Promise.all(batchPromises);
     for (let j = 0; j < batchResults.length; j++) {
@@ -482,8 +483,8 @@ async function replayAndJudge(
   };
 }
 
-async function judgeTurn(userMessage: string, original: string, newResp: string): Promise<any> {
-  const fallback = { tono_consistente: 'si', productos_clave: 'na', formato_precio: 'na', intencion_venta: 'igual', respeta_reglas: 'si', mejor_o_peor_general: 'igual', severidad_regresion: 'ninguna', razon: '' };
+async function judgeTurn(userMessage: string, original: string, newResp: string, changeContext?: string): Promise<any> {
+  const fallback = { mejor_o_peor_general: 'igual', severidad_regresion: 'ninguna', razon: '' };
 
   try {
     const res = await anthropic.messages.create({
@@ -492,31 +493,33 @@ async function judgeTurn(userMessage: string, original: string, newResp: string)
       system: `Comparas respuestas de un bot de WhatsApp: ORIGINAL vs NUEVA.
 
 IMPORTANTE: NO se espera que la respuesta nueva sea IDENTICA a la original.
-Lo que importa es que la INTENCION sea la misma y la CALIDAD sea similar o mejor.
+Las respuestas van a ser NATURALMENTE distintas porque son generadas por IA.
+Tu trabajo es detectar si hay una REGRESION REAL, no diferencias cosméticas.
 
-Ejemplos de cosas que estan BIEN (no son regresion):
-- Mencionar productos distintos pero de la misma categoria → OK
-- Usar palabras diferentes para decir lo mismo → OK
-- Dar mas o menos detalle → OK
-- Cambiar el orden de la info → OK
-- Nombrar precios levemente distintos si son del catalogo → OK
+${changeContext ? `CONTEXTO DEL CAMBIO: "${changeContext}"\nSolo evaluá si la diferencia está RELACIONADA con este cambio. Si el turno no tiene nada que ver con lo que se cambió, es "ninguna" siempre.` : ''}
 
-Ejemplos de REGRESION REAL (grave):
-- Inventar productos que no existen
-- Mandar al cliente a la web cuando no deberia
-- No responder lo que el cliente pregunta
-- Cambiar completamente el tono (de casual a formal o viceversa)
-- Dar info contradictoria con las reglas del negocio
+REGRESION = la nueva respuesta es PEOR para el cliente o el negocio.
+NO es regresion:
+- Responder distinto pero igual de bien → ninguna
+- Mencionar otros productos de la misma categoria → ninguna
+- Ser mas o menos detallado → ninguna
+- Usar otras palabras → ninguna
+- Diferencias de estilo que no afectan al cliente → ninguna
 
-Evaluá la NUEVA:
-1. tono_consistente (si/no)
-2. productos_clave (si/parcial/na) — "si" si responde sobre el mismo TIPO de producto
-3. formato_precio (si/no/na)
-4. intencion_venta (mejor/igual/peor)
-5. respeta_reglas (si/no)
-6. mejor_o_peor_general (mejor/igual/peor)
-Severidad: grave (inventa/rompe reglas), leve (pierde info importante), ninguna (ok o mejor)
-JSON: {"tono_consistente":"si","productos_clave":"na","formato_precio":"na","intencion_venta":"igual","respeta_reglas":"si","mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
+SI es regresion:
+- Inventar productos/precios (grave)
+- No responder lo que preguntaron (grave)
+- Contradecir reglas del negocio (grave)
+- Perder info critica que el cliente necesitaba (leve)
+
+Evaluá:
+1. mejor_o_peor_general (mejor/igual/peor)
+2. severidad_regresion (grave/leve/ninguna)
+3. razon (frase corta, o vacio si ninguna)
+
+En caso de duda → "ninguna". Se conservador marcando regresiones.
+
+JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
       messages: [{ role: 'user', content: `CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}` }],
     });
     const text = res.content.find(b => b.type === 'text')?.text || '{}';
