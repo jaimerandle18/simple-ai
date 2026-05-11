@@ -337,7 +337,9 @@ async function replayAndJudge(
   let worstSeverity = 'ninguna';
   const severityOrder: Record<string, number> = { ninguna: 0, leve: 1, grave: 2 };
 
-  for (let i = 0; i < turns.length; i++) {
+  // Máximo 5 turnos por golden para no tardar una eternidad
+  const maxTurns = Math.min(turns.length, 5);
+  for (let i = 0; i < maxTurns; i++) {
     const turn = turns[i];
 
     // Historial con turnos ORIGINALES anteriores
