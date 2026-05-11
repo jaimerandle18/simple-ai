@@ -82,7 +82,7 @@ Tu trabajo es hacerle preguntas al dueño del negocio hasta tener TODA la info p
 - Redes sociales (Instagram, etc.)
 - Publico objetivo (edad, genero, estilo)
 
-## 2. PERSONA DEL BOT (bot_persona)
+## 2. AGENTE IA(bot_persona)
 - Nombre del agente (sugerir uno si no se le ocurre)
 - Tono: casual, formal, amigable, vendedor
 - Usa emojis? (sugerir max 1 por mensaje)
@@ -225,7 +225,7 @@ function configToDocument(config: any): string {
   };
 
   addSection('business', 'NEGOCIO');
-  addSection('bot_persona', 'PERSONA DEL BOT');
+  addSection('bot_persona', 'AGENTE IA');
   addSection('horarios', 'HORARIOS');
   addSection('pago', 'PAGOS');
   addSection('envio', 'ENVIOS');

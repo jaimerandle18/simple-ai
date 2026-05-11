@@ -12,9 +12,48 @@ import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
 import Anthropic from '@anthropic-ai/sdk';
+import Fuse from 'fuse.js';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const API_LAMBDA_URL = process.env.API_BASE_URL || process.env.API_LAMBDA_URL || '';
+
+// ============================================================
+// MISMO PIPELINE QUE EL BOT REAL (catalog + tools + prompt)
+// ============================================================
+
+function searchCatalog(query: string, catalog: any[], categoria?: string): any[] {
+  let pool = catalog;
+  if (categoria) {
+    const catNorm = categoria.toLowerCase();
+    const filtered = pool.filter((p: any) => (p.category || '').toLowerCase().includes(catNorm));
+    if (filtered.length > 0) pool = filtered;
+  }
+  const fuse = new Fuse(pool, {
+    keys: [{ name: 'name', weight: 0.4 }, { name: 'category', weight: 0.2 }, { name: 'brand', weight: 0.1 }, { name: 'description', weight: 0.15 }],
+    threshold: 0.45, ignoreLocation: true,
+  });
+  const results = fuse.search(query);
+  if (results.length > 0) return results.slice(0, 6).map(r => r.item);
+  const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const terms = normalize(query).split(/\s+/).filter(t => t.length >= 3);
+  if (terms.length === 0) return [];
+  return pool.map((p: any) => {
+    const text = normalize([p.name, p.category, p.brand, p.description].filter(Boolean).join(' '));
+    let score = 0; for (const t of terms) { if (text.includes(t)) score += 10; }
+    return { ...p, _score: score };
+  }).filter((x: any) => x._score > 0).sort((a: any, b: any) => b._score - a._score).slice(0, 6);
+}
+
+function formatProducts(products: any[]): string {
+  if (products.length === 0) return '(ninguno en contexto, usa buscar_productos)';
+  return products.map((p, i) => `- id: ${i+1}\n  nombre: "${p.name}"\n  precio: "${p.price || 'Consultar'}"\n  categoria: "${p.category || 'N/A'}"${p.sizes?.length ? `\n  talles: [${p.sizes.join(', ')}]` : ''}`).join('\n\n');
+}
+
+const SEARCH_TOOL: Anthropic.Tool[] = [{
+  name: 'buscar_productos',
+  description: 'Busca productos en el catálogo del negocio por nombre, categoría o uso.',
+  input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Texto para buscar' }, categoria: { type: 'string', description: 'Filtrar por categoría' } }, required: ['query'] },
+}];
 
 // ============================================================
 // HANDLER
@@ -210,10 +249,32 @@ async function executeRegression(tenantId: string, runId: string) {
   const goldenMap = new Map(allGoldens.map((g: any) => [g.goldenId, g]));
   const goldenIds: string[] = run.goldenIds || [];
 
-  // Cargar agentConfig para buildear el prompt
+  // Cargar agentConfig + catálogo REAL (mismo que usa el bot)
   const agent = await getItem(keys.agent(tenantId, 'main'));
   const agentConfig = { ...(agent?.agentConfig || {}), extraInstructions: run.newPrompt };
-  const systemPrompt = buildPrompt(agentConfig);
+  const catalog = (await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 500 }))
+    .filter((p: any) => p.name && p.name.length > 2);
+
+  // Categorías del catálogo
+  const catCounts: Record<string, number> = {};
+  for (const p of catalog) { if ((p as any).category) catCounts[(p as any).category] = (catCounts[(p as any).category] || 0) + 1; }
+  const categories = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(', ');
+
+  // Prompt completo (mismo que test-chat y el bot real)
+  const HARDCODED_RULES = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.
+2. NUNCA digas "no tengo eso cargado" si hay productos en contexto.
+3. Precio formateado: $XX.XXX
+4. Las fotos se envían AUTOMÁTICAMENTE.
+5. USO DE buscar_productos: solo si el cliente pide categoría/producto NUEVO.
+6. Si el cliente quiere comprar, pedile los datos.
+7. Si insulta o pide humano: "Te paso con alguien del equipo."`;
+
+  const name = agentConfig.assistantName || 'el vendedor';
+  const web = agentConfig.websiteUrl || '';
+  const activeRules = agentConfig.extraInstructions || HARDCODED_RULES;
+
+  const stableBlock = `Sos un vendedor virtual por WhatsApp de un comercio argentino.\n\n# TONO\nArgentino casual, vos, conciso. Máx 1 emoji. Máximo 4-5 líneas.\nNUNCA uses signos de apertura.\n\n# REGLAS BASE\n${HARDCODED_RULES}`;
+  const tenantBlock = `# IDENTIDAD\nNombre: ${name}${web ? `. Web: ${web}` : ''}\n\n${activeRules !== HARDCODED_RULES ? `# REGLAS DEL NEGOCIO\n${activeRules}` : ''}\n\n# CATEGORÍAS\n${categories}${agentConfig.promotions ? `\n\n# PROMOCIONES\n${agentConfig.promotions}` : ''}${agentConfig.businessHours ? `\n\n# HORARIO\n${agentConfig.businessHours}` : ''}${agentConfig.welcomeMessage ? `\n\n# BIENVENIDA\n${agentConfig.welcomeMessage}` : ''}`;
 
   const results: any[] = [];
 
@@ -221,7 +282,6 @@ async function executeRegression(tenantId: string, runId: string) {
     const golden = goldenMap.get(goldenIds[i]);
     if (!golden) continue;
 
-    // Actualizar progreso
     await putItem({
       ...run,
       status: 'running',
@@ -230,7 +290,7 @@ async function executeRegression(tenantId: string, runId: string) {
     });
 
     try {
-      const result = await replayAndJudge(golden, systemPrompt);
+      const result = await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories);
       results.push(result);
     } catch (err: any) {
       results.push({
@@ -269,35 +329,75 @@ async function executeRegression(tenantId: string, runId: string) {
 // REPLAY + JUDGE (por golden)
 // ============================================================
 
-async function replayAndJudge(golden: any, systemPrompt: string): Promise<any> {
+async function replayAndJudge(
+  golden: any, stableBlock: string, tenantBlock: string, catalog: any[], categories: string,
+): Promise<any> {
   const turns = golden.turns || [];
   const turnResults: any[] = [];
   let worstSeverity = 'ninguna';
   const severityOrder: Record<string, number> = { ninguna: 0, leve: 1, grave: 2 };
 
-  // Usar historial ORIGINAL como contexto para que cada turno tenga el mismo
-  // contexto que la conversación real. Solo el turno actual se regenera.
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
 
-    // Armar historial con todos los turnos ORIGINALES anteriores
+    // Historial con turnos ORIGINALES anteriores
     const history: Anthropic.MessageParam[] = [];
     for (let j = 0; j < i; j++) {
       history.push({ role: 'user', content: turns[j].userMessage });
       history.push({ role: 'assistant', content: turns[j].botResponse });
     }
 
+    // Buscar productos relevantes para este turno (mismo que hace el bot real)
+    const searchResults = searchCatalog(turn.userMessage, catalog);
+    const productsBlock = `# PRODUCTOS_DISPONIBLES\n${formatProducts(searchResults)}`;
+
+    const systemPromptBlocks: Anthropic.TextBlockParam[] = [
+      { type: 'text', text: stableBlock, cache_control: { type: 'ephemeral' } } as any,
+      { type: 'text', text: tenantBlock, cache_control: { type: 'ephemeral' } } as any,
+      { type: 'text', text: productsBlock },
+    ];
+
+    const msgs: Anthropic.MessageParam[] = [...history, { role: 'user', content: turn.userMessage }];
+
     let newResponse = '';
     try {
-      const res = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
-        system: systemPrompt,
-        messages: [...history, { role: 'user', content: turn.userMessage }],
-      });
-      newResponse = res.content.find(b => b.type === 'text')?.text || '(sin respuesta)';
-    } catch {
-      newResponse = '(error al generar)';
+      // Loop de tool use (mismo que el bot real)
+      for (let round = 0; round < 3; round++) {
+        const res = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 500,
+          system: systemPromptBlocks,
+          tools: SEARCH_TOOL,
+          messages: msgs,
+        });
+
+        if (res.stop_reason === 'end_turn') {
+          newResponse = res.content.find(b => b.type === 'text')?.text || '(sin respuesta)';
+          break;
+        }
+
+        if (res.stop_reason === 'tool_use') {
+          msgs.push({ role: 'assistant', content: res.content });
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const tu of res.content.filter(b => b.type === 'tool_use')) {
+            if (tu.type !== 'tool_use') continue;
+            const input = tu.input as { query: string; categoria?: string };
+            const found = searchCatalog(input.query, catalog, input.categoria);
+            toolResults.push({
+              type: 'tool_result', tool_use_id: tu.id,
+              content: found.length > 0 ? formatProducts(found) : `No encontre para "${input.query}". Categorias: ${categories}`,
+            });
+          }
+          msgs.push({ role: 'user', content: toolResults });
+          continue;
+        }
+
+        newResponse = res.content.find(b => b.type === 'text')?.text || '(sin respuesta)';
+        break;
+      }
+      if (!newResponse) newResponse = '(sin respuesta despues de 3 rondas)';
+    } catch (err: any) {
+      newResponse = '(error: ' + err.message + ')';
     }
 
     const judgement = await judgeTurn(turn.userMessage, turn.botResponse, newResponse);
@@ -374,29 +474,6 @@ JSON: {"tono_consistente":"si","productos_clave":"na","formato_precio":"na","int
 // ============================================================
 // HELPERS
 // ============================================================
-
-function buildPrompt(agentConfig: any): string {
-  const name = agentConfig.assistantName || 'el vendedor';
-  const tone = agentConfig.tone || 'casual';
-  const welcome = agentConfig.welcomeMessage || '';
-  const hours = agentConfig.businessHours || '';
-  const promos = agentConfig.promotions || '';
-  const extra = agentConfig.extraInstructions || '';
-
-  return `Sos ${name}, vendedor virtual por WhatsApp.
-Tono: ${tone}. Argentino, conciso, max 4-5 lineas. Max 1 emoji.
-${welcome ? `Saludo: "${welcome}"` : ''}
-${hours ? `Horarios: ${hours}` : ''}
-${promos ? `Promos: ${promos}` : ''}
-${extra ? `\n${extra}` : ''}
-
-REGLAS:
-1. SOLO mencionar productos de PRODUCTOS_DISPONIBLES. NUNCA inventar.
-2. Precio formateado: $XX.XXX
-3. NUNCA mandar al cliente a la web.
-4. Si quiere comprar, pedir datos.
-5. Si insulta o pide humano: "Te paso con alguien del equipo."`;
-}
 
 function shuffleArray<T>(arr: T[]): T[] {
   const copy = [...arr];
