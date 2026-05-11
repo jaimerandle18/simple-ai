@@ -59,13 +59,6 @@ export default function OnboardingPage() {
     setLoading(true);
 
     try {
-      // Guardar prompt viejo ANTES del cambio
-      let oldPrompt = '';
-      try {
-        const agentBefore = await api('/agents/main', { tenantId: tenantId! });
-        oldPrompt = agentBefore?.agentConfig?.extraInstructions || '';
-      } catch {}
-
       const res = await api('/onboarding/chat', {
         method: 'POST',
         tenantId,
@@ -80,18 +73,14 @@ export default function OnboardingPage() {
       if (res.completedSections) setCompletedSections(res.completedSections);
       window.dispatchEvent(new Event('config-changed'));
 
-      // Si hay goldens, lanzar regression con el prompt nuevo
+      // Siempre intentar regression — el backend decide si skipear
       try {
-        const agentAfter = await api('/agents/main', { tenantId: tenantId! });
-        const newPrompt = agentAfter?.agentConfig?.extraInstructions || '';
-        if (oldPrompt !== newPrompt) {
-          const regResult = await api('/regression/start', {
-            method: 'POST', tenantId: tenantId!,
-            body: { oldPrompt, newPrompt },
-          });
-          if (!regResult.skipped && regResult.runId) {
-            setRegressionRunId(regResult.runId);
-          }
+        const regResult = await api('/regression/start', {
+          method: 'POST', tenantId: tenantId!,
+          body: { oldPrompt: '', newPrompt: 'onboarding_change' },
+        });
+        if (!regResult.skipped && regResult.runId) {
+          setRegressionRunId(regResult.runId);
         }
       } catch { /* sin goldens o error, no bloquear */ }
     } catch (err: any) {

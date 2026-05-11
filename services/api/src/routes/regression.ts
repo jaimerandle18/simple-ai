@@ -76,7 +76,7 @@ export async function handleRegression(event: APIGatewayProxyEventV2) {
     const recentRuns: any[] = await queryItems(`TENANT#${tenantId}`, 'REGRUN#', { limit: 10 });
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const recentCount = recentRuns.filter((r: any) => r.startedAt > oneHourAgo).length;
-    if (recentCount >= 3) {
+    if (recentCount >= 10) {
       return json({ runId: null, skipped: true, reason: 'rate_limit' });
     }
 
