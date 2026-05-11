@@ -1,0 +1,13 @@
+export { ChannelAdapter, registerAdapter, getAdapter, getAllAdapters } from './base';
+export type { ChannelType, NormalizedMessage, SendTextResult } from './base';
+export { WhatsAppAdapter } from './whatsapp';
+export type { WhatsAppCredentials } from './whatsapp';
+export { WahaAdapter } from './whatsapp-waha';
+export type { WahaCredentials } from './whatsapp-waha';
+export { EvolutionAdapter } from './whatsapp-evolution';
+export type { EvolutionCredentials } from './whatsapp-evolution';
+export { InstagramAdapter } from './instagram';
+export type { InstagramCredentials } from './instagram';
+export { FacebookAdapter } from './facebook';
+export type { FacebookCredentials } from './facebook';
+export { formatOutbound } from './outbound-formatter';

@@ -7,7 +7,7 @@ async function proxyRequest(req: NextRequest, { params }: { params: { path: stri
   const path = '/' + params.path.join('/');
 
   // Use Lambda Function URL for slow routes (no 30s timeout)
-  const useLambdaUrl = path.startsWith('/agents/test-chat') || path.startsWith('/agents/scrape') || path.startsWith('/agents/feedback') || path.startsWith('/channels/waha');
+  const useLambdaUrl = path.startsWith('/agents/test-chat') || path.startsWith('/agents/scrape') || path.startsWith('/agents/feedback') || path.startsWith('/channels/waha') || path.startsWith('/onboarding') || path.startsWith('/golden');
   const baseUrl = useLambdaUrl ? API_LAMBDA_URL : API_URL;
   const url = `${baseUrl}${path}`;
 

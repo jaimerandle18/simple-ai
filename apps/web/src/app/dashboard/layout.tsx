@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { redirect } from 'next/navigation';
 import { Sidebar } from '@/components/dashboard/Sidebar';
+import { VerificationBanner } from '@/components/dashboard/VerificationBanner';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
@@ -43,7 +44,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <img src="/assets/simpleLogo1.png" alt="Simple AI" className="h-6 w-auto" />
       </div>
 
-      <main className="md:ml-64 h-full overflow-auto pt-14 md:pt-0">{children}</main>
+      <div className="md:ml-64 h-full flex flex-col pt-14 md:pt-0">
+        <VerificationBanner />
+        <main className="flex-1 overflow-auto">{children}</main>
+      </div>
     </div>
   );
 }

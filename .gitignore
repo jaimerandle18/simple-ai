@@ -9,6 +9,10 @@ dist/
 .env.local
 .env.*.local
 
+# Lambda layers (binarios nativos, buildear con scripts/build-sharp-layer.sh)
+layers/*/nodejs/node_modules/
+layers/*/nodejs/package-lock.json
+
 # AWS CDK
 cdk.out/
 cdk.context.json

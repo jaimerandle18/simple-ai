@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:@aws-sdk/*",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:@aws-sdk/* --external:sharp",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -12,10 +12,12 @@
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@shared/types": "*",
     "fuse.js": "^7.3.0",
-    "openai": "^4.55.0"
+    "openai": "^4.55.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.140",
+    "@types/sharp": "^0.31.1",
     "typescript": "^5.5.0"
   }
 }

@@ -146,6 +146,8 @@ export default function ConversationsPage() {
       });
       console.log('[feedback confirm]', result);
       setFeedbackStep('done');
+      setShowVerifyPrompt(true);
+      window.dispatchEvent(new Event('config-changed'));
       setTimeout(closeFeedback, 1800);
     } catch (err) {
       console.error(err);
@@ -194,6 +196,23 @@ export default function ConversationsPage() {
       });
       updateConv(selectedConv.conversationId, { assignedTo: newAssignment });
     } catch (err) { console.error(err); }
+  };
+
+  const [showVerifyPrompt, setShowVerifyPrompt] = useState(false);
+  const [goldenSaving, setGoldenSaving] = useState(false);
+  const [goldenSaved, setGoldenSaved] = useState(false);
+  const markAsGolden = async () => {
+    if (!selectedConv || !tenantId) return;
+    setGoldenSaving(true);
+    try {
+      await api('/golden/mark', {
+        method: 'POST', tenantId,
+        body: { conversationId: selectedConv.conversationId },
+      });
+      setGoldenSaved(true);
+      setTimeout(() => setGoldenSaved(false), 3000);
+    } catch (err) { console.error(err); }
+    setGoldenSaving(false);
   };
 
   if (loading) {
@@ -389,11 +408,19 @@ export default function ConversationsPage() {
                   </div>
 
                   {feedbackStep === 'done' ? (
-                    <div className="flex items-center justify-center gap-2 py-2 text-green-600 font-medium text-sm">
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                      </svg>
-                      Corrección aplicada al agente
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-center gap-2 py-2 text-green-600 font-medium text-sm">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                        </svg>
+                        Correccion aplicada
+                      </div>
+                      <a
+                        href="/dashboard/golden"
+                        className="flex items-center justify-center gap-2 py-2 px-4 bg-amber-50 text-amber-700 text-xs font-medium rounded-lg border border-amber-200 hover:bg-amber-100 transition"
+                      >
+                        &#9888; Verificar que no se rompio nada
+                      </a>
                     </div>
                   ) : (
                     <div className="flex gap-3">
@@ -506,6 +533,23 @@ export default function ConversationsPage() {
                       </svg>
                       Manual
                     </>
+                  )}
+                </button>
+                <button
+                  onClick={markAsGolden}
+                  disabled={goldenSaving || goldenSaved}
+                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors ${
+                    goldenSaved
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
+                  }`}
+                >
+                  {goldenSaved ? (
+                    <>&#10003; Guardada</>
+                  ) : goldenSaving ? (
+                    <>Guardando...</>
+                  ) : (
+                    <>&#9733; Guardar como referencia</>
                   )}
                 </button>
               </div>

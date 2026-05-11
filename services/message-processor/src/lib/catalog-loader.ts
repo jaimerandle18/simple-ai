@@ -1,6 +1,24 @@
 import { queryItems } from './dynamo-helpers';
 import type { EnrichedProduct } from './types';
 
+// ============================================================
+// CACHE EN MEMORIA (TTL 5 min) — evita reload en cada mensaje
+// ============================================================
+const catalogCache = new Map<string, { data: EnrichedProduct[]; ts: number }>();
+const CATALOG_TTL_MS = 5 * 60 * 1000;
+
+export async function getCachedCatalog(tenantId: string): Promise<EnrichedProduct[]> {
+  const cached = catalogCache.get(tenantId);
+  if (cached && Date.now() - cached.ts < CATALOG_TTL_MS) {
+    console.log(`[CATALOG] Cache hit for ${tenantId} (${cached.data.length} products)`);
+    return cached.data;
+  }
+  const data = await loadCatalog(tenantId);
+  catalogCache.set(tenantId, { data, ts: Date.now() });
+  console.log(`[CATALOG] Loaded & cached ${data.length} products for ${tenantId}`);
+  return data;
+}
+
 export async function loadCatalog(tenantId: string): Promise<EnrichedProduct[]> {
   const items = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
   return items

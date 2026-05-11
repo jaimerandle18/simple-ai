@@ -22,16 +22,34 @@ interface Metrics {
   tagCounts: Record<string, number>;
 }
 
+interface AIMetrics {
+  totalTurns: number;
+  turnsToday: number;
+  turnsThisWeek: number;
+  costEstimate: number;
+  latencyP50: number;
+  latencyP95: number;
+  cacheHitRatio: number;
+  modelBreakdown: Record<string, number>;
+  channelBreakdown: Record<string, number>;
+  complexityBreakdown: Record<string, number>;
+  escalationRate: number;
+  dailyStats: Array<{ day: string; turns: number; avgLatencyMs: number }>;
+}
+
 export default function MetricsPage() {
   const { auth } = useAuth();
   const tenantId = auth?.tenantId;
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [aiMetrics, setAiMetrics] = useState<AIMetrics | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!tenantId) return;
-    api('/metrics', { tenantId })
-      .then(setMetrics)
+    Promise.all([
+      api('/metrics', { tenantId }).then(setMetrics),
+      api('/metrics/ai', { tenantId }).then(setAiMetrics).catch(() => {}),
+    ])
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [tenantId]);
@@ -123,6 +141,88 @@ export default function MetricsPage() {
           )}
         </div>
       </div>
+
+      {/* Métricas de IA */}
+      {aiMetrics && aiMetrics.totalTurns > 0 && (
+        <>
+          <div className="mb-6 mt-2">
+            <h2 className="text-lg font-semibold text-gray-900">Agente IA</h2>
+            <p className="text-gray-500 text-xs mt-0.5">Costo, latencia y uso de modelos</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <StatCard label="Costo estimado (7d)" value={aiMetrics.costEstimate} suffix=" USD" color="amber" />
+            <StatCard label="Latencia P50" value={Math.round(aiMetrics.latencyP50 / 1000 * 10) / 10} suffix="s" color="primary" />
+            <StatCard label="Latencia P95" value={Math.round(aiMetrics.latencyP95 / 1000 * 10) / 10} suffix="s" color="secondary" />
+            <StatCard label="Cache hit" value={aiMetrics.cacheHitRatio} suffix="%" color="emerald" />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <MiniCard label="Turnos hoy" value={aiMetrics.turnsToday} />
+            <MiniCard label="Turnos semana" value={aiMetrics.turnsThisWeek} />
+            <MiniCard label="Escalados a humano" value={aiMetrics.escalationRate} />
+            <MiniCard label="Total turnos" value={aiMetrics.totalTurns} />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            {/* Modelo */}
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Uso por modelo</h3>
+              <div className="space-y-2">
+                {Object.entries(aiMetrics.modelBreakdown).map(([model, count]) => (
+                  <BarRow
+                    key={model}
+                    label={model.includes('haiku') ? 'Haiku' : model.includes('sonnet') ? 'Sonnet' : model}
+                    value={count}
+                    total={aiMetrics.totalTurns}
+                    color={model.includes('haiku') ? 'bg-emerald-500' : 'bg-primary-500'}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Canal */}
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Volumen por canal</h3>
+              <div className="space-y-2">
+                {Object.entries(aiMetrics.channelBreakdown).map(([ch, count]) => (
+                  <BarRow key={ch} label={ch} value={count} total={aiMetrics.totalTurns} color="bg-primary-500" />
+                ))}
+              </div>
+            </div>
+
+            {/* Complejidad */}
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Complejidad de mensajes</h3>
+              <div className="space-y-2">
+                {Object.entries(aiMetrics.complexityBreakdown).map(([cx, count]) => (
+                  <BarRow key={cx} label={cx} value={count} total={aiMetrics.totalTurns} color="bg-amber-500" />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Latencia por día */}
+          {aiMetrics.dailyStats.length > 1 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm mb-6">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Actividad diaria (7 dias)</h3>
+              <div className="flex items-end gap-1 h-32">
+                {aiMetrics.dailyStats.map(d => {
+                  const maxTurns = Math.max(...aiMetrics.dailyStats.map(x => x.turns));
+                  const pct = maxTurns > 0 ? (d.turns / maxTurns) * 100 : 0;
+                  return (
+                    <div key={d.day} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-[10px] text-gray-400">{d.turns}</span>
+                      <div className="w-full bg-primary-500 rounded-t" style={{ height: `${Math.max(pct, 4)}%` }} />
+                      <span className="text-[10px] text-gray-400">{d.day.slice(5)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

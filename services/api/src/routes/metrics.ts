@@ -98,5 +98,96 @@ export async function handleMetrics(event: APIGatewayProxyEventV2) {
     });
   }
 
+  // GET /metrics/ai — métricas de IA: costo, cache, latencia, modelos
+  if (method === 'GET' && path === '/metrics/ai') {
+    const today = new Date().toISOString().slice(0, 10);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // Query turn metrics de los últimos 7 días
+    const turns: any[] = await queryItems(`METRICS#${tenantId}`, 'TURN#', { limit: 1000 });
+
+    if (turns.length === 0) {
+      return json({
+        totalTurns: 0, costEstimate: 0,
+        latencyP50: 0, latencyP95: 0,
+        cacheHitRatio: 0, modelBreakdown: {},
+        channelBreakdown: {}, complexityBreakdown: {},
+        turnsToday: 0, turnsThisWeek: 0,
+        escalationRate: 0,
+      });
+    }
+
+    // Latencia
+    const latencies = turns.map(t => t.latencyMs || 0).filter(l => l > 0).sort((a, b) => a - b);
+    const p50 = latencies[Math.floor(latencies.length * 0.5)] || 0;
+    const p95 = latencies[Math.floor(latencies.length * 0.95)] || 0;
+
+    // Cache hit ratio (estimado desde logs)
+    const totalCacheRead = turns.reduce((sum, t) => sum + (t.cacheReadTokens || 0), 0);
+    const totalCacheCreate = turns.reduce((sum, t) => sum + (t.cacheCreateTokens || 0), 0);
+    const cacheHitRatio = (totalCacheRead + totalCacheCreate) > 0
+      ? totalCacheRead / (totalCacheRead + totalCacheCreate)
+      : 0;
+
+    // Model breakdown
+    const modelBreakdown: Record<string, number> = {};
+    const channelBreakdown: Record<string, number> = {};
+    const complexityBreakdown: Record<string, number> = {};
+    let escalatedCount = 0;
+    let turnsToday = 0;
+
+    for (const t of turns) {
+      const model = t.modelUsed || 'unknown';
+      modelBreakdown[model] = (modelBreakdown[model] || 0) + 1;
+
+      const ch = t.channel || 'unknown';
+      channelBreakdown[ch] = (channelBreakdown[ch] || 0) + 1;
+
+      const cx = t.complexity || 'unknown';
+      complexityBreakdown[cx] = (complexityBreakdown[cx] || 0) + 1;
+
+      if (t.escalated) escalatedCount++;
+      if (t.timestamp?.startsWith(today)) turnsToday++;
+    }
+
+    // Costo estimado (aproximación basada en modelo)
+    // Haiku: ~$0.001/msg, Sonnet: ~$0.005/msg
+    const haikuCount = modelBreakdown['claude-haiku-4-5-20251001'] || 0;
+    const sonnetCount = modelBreakdown['claude-sonnet-4-6'] || 0;
+    const costEstimate = (haikuCount * 0.001) + (sonnetCount * 0.005);
+
+    // Latencia por día (últimos 7 días)
+    const latencyByDay: Record<string, { count: number; totalMs: number }> = {};
+    for (const t of turns) {
+      const day = (t.timestamp || '').slice(0, 10);
+      if (!day) continue;
+      if (!latencyByDay[day]) latencyByDay[day] = { count: 0, totalMs: 0 };
+      latencyByDay[day].count++;
+      latencyByDay[day].totalMs += (t.latencyMs || 0);
+    }
+    const dailyStats = Object.entries(latencyByDay)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, stats]) => ({
+        day,
+        turns: stats.count,
+        avgLatencyMs: Math.round(stats.totalMs / stats.count),
+      }));
+
+    return json({
+      totalTurns: turns.length,
+      turnsToday,
+      turnsThisWeek: turns.length,
+      costEstimate: Math.round(costEstimate * 100) / 100,
+      latencyP50: p50,
+      latencyP95: p95,
+      cacheHitRatio: Math.round(cacheHitRatio * 100),
+      modelBreakdown,
+      channelBreakdown,
+      complexityBreakdown,
+      escalationRate: turns.length > 0 ? Math.round((escalatedCount / turns.length) * 100) : 0,
+      dailyStats,
+    });
+  }
+
   return error('Not found', 404);
 }

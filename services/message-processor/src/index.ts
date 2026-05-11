@@ -3,17 +3,17 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { getItem, putItem, queryItems, queryByGSI, keys } from './lib/dynamo-helpers';
-import { parseWhatsAppWebhook, parseWahaWebhook, parseEvolutionWebhook, ParsedInboundMessage, ParsedStatusUpdate, ParsedWahaMessage, ParsedEvolutionMessage } from './lib/webhook-parser';
-import { sendWhatsAppMessage, sendWhatsAppImage, sendWahaMessage, sendEvolutionMessage, markAsRead } from './lib/whatsapp-client';
-import { loadCatalog } from './lib/catalog-loader';
-import { cleanMarkdownForWhatsApp } from './lib/markdown-cleaner';
+import { getCachedCatalog } from './lib/catalog-loader';
+import sharp from 'sharp';
 import type { EnrichedProduct } from './lib/types';
 import {
   shouldEscalate, isCircuitOpen, recordSuccess, recordFailure,
-  getFallbackMessage, checkRateLimit, detectInjection,
+  getFallbackMessage, checkRateLimit, detectInjectionWithLLM,
   INJECTION_RESPONSE,
 } from './lib/production-guards';
 import { transcribeWhatsAppAudio, downloadWhatsAppMedia } from './lib/audio-transcriber';
+import { loadContactMemory, updateContactMemory } from './lib/contact-memory';
+import { logTurnMetrics } from './lib/ab-testing';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -99,47 +99,44 @@ function searchCatalog(query: string, catalog: EnrichedProduct[], categoria?: st
 }
 
 // ============================================================
-// FORMATEAR PRODUCTOS PARA EL PROMPT (YAML estructurado)
+// FORMATEAR PRODUCTOS PARA EL PROMPT (JSON compacto)
 // ============================================================
+// Diccionario: i=id, n=nombre, m=marca, c=categoría, pr=precio, pd=precio display, s=specs, t=talles, ta=talles agotados, d=descripción
 function formatProductsForPrompt(products: EnrichedProduct[]): string {
   if (products.length === 0) return '(ninguno cargado en este contexto, usá buscar_productos si necesitás)';
 
-  let block = '';
-  for (const [i, p] of products.entries()) {
-    block += `- id: ${i + 1}
-  nombre: "${p.name}"
-  marca: "${p.brand || 'N/A'}"
-  categoria: "${p.category || 'N/A'}"
-  precio: ${p.priceNum || 'null'}
-  precio_display: "$${p.priceNum?.toLocaleString('es-AR') || p.price}"
-  specs:`;
+  const compact = products.map((p, i) => {
+    const item: Record<string, any> = {
+      i: i + 1,
+      n: p.name,
+      m: p.brand || undefined,
+      c: p.category || undefined,
+      pr: p.priceNum || undefined,
+      pd: `$${(p.priceNum || 0).toLocaleString('es-AR')}`,
+    };
 
+    // Specs compactas (filtrar nulls)
     if (p.attributes && Object.keys(p.attributes).length > 0) {
+      const specs: Record<string, any> = {};
       for (const [k, v] of Object.entries(p.attributes)) {
-        if (v !== null && v !== undefined) {
-          block += `\n    ${k}: ${typeof v === 'string' ? `"${v}"` : v}`;
-        }
+        if (v !== null && v !== undefined) specs[k] = v;
       }
-    } else {
-      block += ' {}';
+      if (Object.keys(specs).length > 0) item.s = specs;
     }
 
-    // Talles disponibles y agotados
+    // Talles
     const sizes = (p as any).sizes;
     const outOfStock = (p as any).outOfStockSizes;
-    if (sizes && sizes.length > 0) {
-      block += `\n  talles_disponibles: [${sizes.join(', ')}]`;
-    }
-    if (outOfStock && outOfStock.length > 0) {
-      block += `\n  talles_agotados: [${outOfStock.join(', ')}]`;
-    }
+    if (sizes && sizes.length > 0) item.t = sizes;
+    if (outOfStock && outOfStock.length > 0) item.ta = outOfStock;
 
-    if (p.description) {
-      block += `\n  descripcion: "${p.description.slice(0, 120).replace(/"/g, "'")}"`;
-    }
-    block += '\n\n';
-  }
-  return block;
+    if (p.description) item.d = p.description.slice(0, 120);
+
+    // Limpiar undefined
+    return Object.fromEntries(Object.entries(item).filter(([, v]) => v !== undefined));
+  });
+
+  return JSON.stringify({ p: compact });
 }
 
 // ============================================================
@@ -306,6 +303,22 @@ function shouldSendPhoto(product: EnrichedProduct, aiResponse: string, allProduc
 // ============================================================
 // GENERAR RESPUESTA CON CLAUDE (con tool use)
 // ============================================================
+type MessageComplexity = 'trivial' | 'followup' | 'new_query' | 'image';
+
+function chooseModel(complexity: MessageComplexity): string {
+  // Trivial y follow-up → Haiku (barato, rápido)
+  // New query e image → Sonnet (mejor razonamiento)
+  if (complexity === 'trivial' || complexity === 'followup') return 'claude-haiku-4-5-20251001';
+  return 'claude-sonnet-4-6';
+}
+
+function chooseMaxRounds(complexity: MessageComplexity): number {
+  if (complexity === 'trivial') return 0;     // sin tools
+  if (complexity === 'followup') return 1;    // máx 1 tool call
+  if (complexity === 'image') return 3;       // puede necesitar buscar
+  return 2;                                   // new_query
+}
+
 async function generateResponse(
   userMessage: string,
   history: Anthropic.MessageParam[],
@@ -314,6 +327,8 @@ async function generateResponse(
   catalog: EnrichedProduct[],
   agentConfig: any,
   imageData?: { base64: string; mimeType: string },
+  complexity: MessageComplexity = 'new_query',
+  historySummary?: string,
 ): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[] }> {
   const name = agentConfig.assistantName || 'el vendedor';
   const web = agentConfig.websiteUrl || '';
@@ -328,7 +343,7 @@ async function generateResponse(
   const categories = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(', ');
 
   const productsBlock = allContextProducts.length > 0
-    ? `\n# PRODUCTOS_DISPONIBLES\n${formatProductsForPrompt(allContextProducts)}\nCada producto tiene specs estructuradas. Usalos para responder preguntas de comparación, recomendación o seguimiento.`
+    ? `\n# PRODUCTOS_DISPONIBLES (formato compacto)\ni=id, n=nombre, m=marca, c=categoría, pr=precio numérico, pd=precio display, s=specs, t=talles disponibles, ta=talles agotados, d=descripción\n${formatProductsForPrompt(allContextProducts)}`
     : '\n# PRODUCTOS_DISPONIBLES\n(ninguno en contexto, usá buscar_productos para encontrar)';
 
   const HARDCODED_RULES = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes productos ni precios.
@@ -349,21 +364,58 @@ async function generateResponse(
 
   const activeRules = agentConfig.extraInstructions || HARDCODED_RULES;
 
-  const systemPrompt = `Sos ${name}, vendedor virtual por WhatsApp de un comercio argentino.${web ? ` Web: ${web}` : ''}
+  // === PROMPT CACHING: separar en bloques estables vs volátiles ===
+  // Bloque 1: ESTABLE (idéntico para todos los tenants, cambia solo con deploys)
+  // → cache_control: ephemeral (se cachea ~5 min entre mensajes del mismo tenant)
+  const stableBlock = `Sos un vendedor virtual por WhatsApp de un comercio argentino.
 
 # TONO
 Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
 NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
 
 # REGLAS
-${activeRules}
+${HARDCODED_RULES}`;
+
+  // Bloque 2: SEMI-ESTABLE (cambia por tenant, pero raramente dentro de una conversación)
+  // → cache_control: ephemeral
+  const tenantBlock = `# IDENTIDAD
+Nombre: ${name}${web ? `. Web: ${web}` : ''}
+
+# REGLAS DEL NEGOCIO
+${activeRules !== HARDCODED_RULES ? activeRules : '(usar reglas base)'}
 
 # CATEGORÍAS DEL CATÁLOGO
 ${categories}
 ${agentConfig.promotions ? `\n# PROMOCIONES\n${agentConfig.promotions}` : ''}
 ${agentConfig.businessHours ? `\n# HORARIO\n${agentConfig.businessHours}` : ''}
-${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo)\n${agentConfig.welcomeMessage}` : ''}
-${productsBlock}`;
+${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo)\n${agentConfig.welcomeMessage}` : ''}`;
+
+  // Bloque 3: VOLÁTIL (cambia cada turno — NO cacheable)
+  const memoryBlock = agentConfig._contactMemory
+    ? `\n# MEMORIA DEL CLIENTE (de conversaciones anteriores)\n${agentConfig._contactMemory}\nUsá esta info para personalizar: saludá por nombre si lo sabés, recordá lo que consultó antes.`
+    : '';
+  const summaryBlock = historySummary
+    ? `\n# RESUMEN DE CONVERSACIÓN PREVIA\n${historySummary}`
+    : '';
+  const volatileBlock = memoryBlock + summaryBlock + productsBlock;
+
+  // System prompt como array con cache_control para Anthropic
+  const systemPromptBlocks: Anthropic.TextBlockParam[] = [
+    {
+      type: 'text',
+      text: stableBlock,
+      cache_control: { type: 'ephemeral' },
+    } as any,
+    {
+      type: 'text',
+      text: tenantBlock,
+      cache_control: { type: 'ephemeral' },
+    } as any,
+    {
+      type: 'text',
+      text: volatileBlock,
+    },
+  ];
 
   // Construir mensajes
   const messages: Anthropic.MessageParam[] = [...history];
@@ -391,15 +443,28 @@ ${productsBlock}`;
     }
   }
 
-  // Loop de tool use (máx 3 rounds)
-  for (let round = 0; round < 3; round++) {
+  // Routing: modelo y max rounds según complejidad
+  const model = chooseModel(complexity);
+  const maxRounds = chooseMaxRounds(complexity);
+  console.log(`[MODEL] complexity=${complexity} → model=${model}, maxRounds=${maxRounds}`);
+
+  const seenToolCalls = new Map<string, number>();
+  const MAX_SAME_TOOL = 3;
+
+  for (let round = 0; round <= maxRounds; round++) {
     const res = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 500,
-      system: systemPrompt,
-      tools: TOOLS,
+      model,
+      max_tokens: complexity === 'trivial' ? 200 : 500,
+      system: systemPromptBlocks,
+      ...(maxRounds > 0 ? { tools: TOOLS } : {}),
       messages,
     });
+
+    // Log cache token metrics
+    const usage = res.usage as any;
+    if (usage) {
+      console.log(`[CACHE] round=${round} input=${usage.input_tokens} output=${usage.output_tokens} cache_read=${usage.cache_read_input_tokens || 0} cache_create=${usage.cache_creation_input_tokens || 0}`);
+    }
 
     // Si no hay tool use, devolver el texto
     if (res.stop_reason === 'end_turn') {
@@ -413,6 +478,31 @@ ${productsBlock}`;
     // Procesar tool use
     if (res.stop_reason === 'tool_use') {
       const toolUseBlocks = res.content.filter(b => b.type === 'tool_use');
+
+      // Loop detection: si la misma tool se llamó 3+ veces, forzar respuesta de texto
+      let loopDetected = false;
+      for (const tu of toolUseBlocks) {
+        if (tu.type !== 'tool_use') continue;
+        const count = (seenToolCalls.get(tu.name) || 0) + 1;
+        seenToolCalls.set(tu.name, count);
+        if (count > MAX_SAME_TOOL) {
+          console.warn(`[LOOP DETECTION] Tool ${tu.name} called ${count}x, breaking`);
+          loopDetected = true;
+        }
+      }
+
+      if (loopDetected) {
+        messages.push({ role: 'assistant', content: res.content });
+        messages.push({ role: 'user', content: 'Ya tenés la info necesaria. Respondé al usuario con texto sin llamar más tools.' });
+        const finalRes = await anthropic.messages.create({
+          model, max_tokens: 500, system: systemPromptBlocks, messages,
+        });
+        const textBlock = finalRes.content.find(b => b.type === 'text');
+        return {
+          text: textBlock ? textBlock.text : 'Disculpá, tuve un problema. ¿Podés repetirme?',
+          productsShown: allProductsShown, freshProducts,
+        };
+      }
 
       // Agregar el turno del assistant con todos los content blocks
       messages.push({ role: 'assistant', content: res.content });
@@ -432,7 +522,7 @@ ${productsBlock}`;
             type: 'tool_result',
             tool_use_id: toolUse.id,
             content: found.length > 0
-              ? `Productos encontrados:\n${formatProductsForPrompt(found)}`
+              ? `Productos encontrados (i=id,n=nombre,m=marca,pr=precio,pd=display,s=specs,t=talles,d=desc):\n${formatProductsForPrompt(found)}`
               : `No encontré productos para "${input.query}". Categorías disponibles: ${categories}`,
           });
         }
@@ -450,7 +540,102 @@ ${productsBlock}`;
     };
   }
 
+  // Si agotó rondas sin texto, retry forzando respuesta sin tools
+  console.warn(`[MAX_ROUNDS] Exhausted ${maxRounds} rounds, forcing text response`);
+  messages.push({ role: 'user', content: 'Respondé al usuario directamente con la info que ya tenés.' });
+  try {
+    const finalRes = await anthropic.messages.create({
+      model, max_tokens: 500, system: systemPromptBlocks, messages,
+    });
+    const textBlock = finalRes.content.find(b => b.type === 'text');
+    if (textBlock) return { text: textBlock.text, productsShown: allProductsShown, freshProducts };
+  } catch { /* fall through */ }
+
   return { text: 'Disculpá, tuve un problema procesando tu consulta. ¿Podés repetirme?', productsShown: allProductsShown, freshProducts };
+}
+
+// ============================================================
+// HISTORY SLIDING WINDOW: últimos 5 crudos, 6-20 resumidos
+// ============================================================
+async function buildOptimizedHistory(
+  conversationId: string,
+  historyItems: any[],
+): Promise<{ history: Anthropic.MessageParam[]; summary: string }> {
+  // Construir todos los mensajes alternando roles
+  const allMessages: { role: 'user' | 'assistant'; content: string; id?: string }[] = [];
+  for (const item of historyItems) {
+    const role = (item as any).direction === 'inbound' ? 'user' as const : 'assistant' as const;
+    const content = (item as any).content as string;
+    const id = (item as any).messageId as string;
+    if (allMessages.length > 0 && allMessages[allMessages.length - 1].role === role) {
+      allMessages[allMessages.length - 1].content += '\n' + content;
+    } else {
+      allMessages.push({ role, content, id });
+    }
+  }
+
+  // Asegurar que empiece con 'user'
+  if (allMessages.length > 0 && allMessages[0].role === 'assistant') {
+    allMessages.shift();
+  }
+
+  // Si <= 5 mensajes, no necesitamos resumen
+  if (allMessages.length <= 5) {
+    return {
+      history: allMessages.map(m => ({ role: m.role, content: m.content })),
+      summary: '',
+    };
+  }
+
+  // Split: últimos 5 crudos, resto para resumen
+  const recentMessages = allMessages.slice(-5);
+  const olderMessages = allMessages.slice(0, -5);
+
+  // Cache key basado en el último mensaje del batch viejo
+  const lastOlderId = olderMessages[olderMessages.length - 1]?.id || 'unknown';
+  const cacheKey = { PK: `CONVSUMMARY#${conversationId}`, SK: lastOlderId };
+
+  let summary = '';
+  try {
+    const cached = await getItem(cacheKey);
+    if (cached?.summary) {
+      summary = cached.summary as string;
+      console.log(`[HISTORY] Cache hit for summary (${olderMessages.length} older msgs)`);
+    }
+  } catch { /* miss */ }
+
+  if (!summary && olderMessages.length > 0) {
+    try {
+      const formatted = olderMessages.map(m =>
+        `${m.role === 'user' ? 'Cliente' : 'Agente'}: ${m.content.slice(0, 150)}`
+      ).join('\n');
+
+      const res = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: `Resumí esta conversación de WhatsApp en máx 100 palabras. Incluí: qué consultó, qué productos le mostraron, qué preferencias expresó. SOLO el resumen.\n\n${formatted}`,
+        }],
+      });
+
+      summary = res.content[0]?.type === 'text' ? res.content[0].text.trim() : '';
+      if (summary) {
+        await putItem({
+          ...cacheKey, summary,
+          ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hora
+        });
+        console.log(`[HISTORY] Generated summary (${olderMessages.length} msgs → ${summary.length} chars)`);
+      }
+    } catch (err: any) {
+      console.error('[HISTORY] Summary generation failed:', err.message);
+    }
+  }
+
+  return {
+    history: recentMessages.map(m => ({ role: m.role, content: m.content })),
+    summary,
+  };
 }
 
 // ============================================================
@@ -481,6 +666,16 @@ async function loadFilesContext(attachedFiles: any[]): Promise<string> {
 }
 
 // ============================================================
+// CHANNEL IMPORTS
+// ============================================================
+import {
+  NormalizedMessage, ChannelAdapter, ChannelType,
+  WhatsAppAdapter, WahaAdapter, EvolutionAdapter,
+  InstagramAdapter, FacebookAdapter,
+  formatOutbound,
+} from './lib/channels';
+
+// ============================================================
 // HANDLER
 // ============================================================
 export const handler = async (event: SQSEvent): Promise<void> => {
@@ -492,226 +687,267 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       continue;
     }
 
+    // WhatsApp Cloud API (Meta)
     if (body.object === 'whatsapp_business_account') {
-      const parsed = parseWhatsAppWebhook(body);
-      if (parsed.kind === 'messages') {
-        for (const msg of parsed.messages) {
-          await processInboundMessage(msg);
-        }
-      } else if (parsed.kind === 'statuses') {
-        for (const status of parsed.statuses) {
-          await processStatusUpdate(status);
-        }
+      const waAdapter = new WhatsAppAdapter({ phoneNumberId: '', accessToken: '' });
+      const messages = waAdapter.parseWebhook(body);
+      const statuses = waAdapter.parseStatusUpdates(body);
+
+      for (const msg of messages) {
+        // Resolver tenantId y credenciales desde el phoneNumberId
+        const phoneNumberId = msg.channelMetadata.phoneNumberId;
+        const channels = await queryByGSI('byChannelExternalId', 'channelExternalId', phoneNumberId);
+        const channel = channels[0];
+        if (!channel) { console.error(`No channel for ${phoneNumberId}`); continue; }
+
+        msg.tenantId = channel.tenantId as string;
+        waAdapter.setCredentials({ phoneNumberId, accessToken: channel.accessToken as string });
+        await processNormalizedMessage(msg, waAdapter);
       }
-    } else if (body.event === 'message' && body.session) {
-      const msg = parseWahaWebhook(body);
-      if (msg) await processWahaMessage(msg);
-    } else if (body.event === 'messages.upsert' && body.instance) {
-      const msg = parseEvolutionWebhook(body);
-      if (msg) await processEvolutionMessage(msg);
+
+      for (const status of statuses) {
+        await processStatusUpdate(status);
+      }
+      continue;
+    }
+
+    // WAHA
+    if (body.event === 'message' && body.session) {
+      const sessionName = body.session || 'default';
+      const wahaUrl = (process.env.WAHA_URL || '').replace(/\/$/, '');
+      const apiKey = process.env.WAHA_API_KEY || '';
+      if (!wahaUrl) { console.error('[WAHA] WAHA_URL not configured'); continue; }
+
+      const wahaAdapter = new WahaAdapter({ wahaUrl, apiKey, sessionName });
+      const messages = wahaAdapter.parseWebhook(body);
+
+      for (const msg of messages) {
+        // Resolver tenantId desde session
+        const ownerRecord = await getItem({ PK: `WAHA_SESSION#${sessionName}`, SK: 'OWNER' });
+        if (!ownerRecord?.tenantId) { console.error(`[WAHA] No owner for session ${sessionName}`); continue; }
+        msg.tenantId = ownerRecord.tenantId as string;
+
+        const wahaChannel = await getItem(keys.wahaChannel(msg.tenantId));
+        if (!wahaChannel?.active) { console.error(`[WAHA] No active channel for ${msg.tenantId}`); continue; }
+
+        await processNormalizedMessage(msg, wahaAdapter);
+      }
+      continue;
+    }
+
+    // Evolution API
+    if (body.event === 'messages.upsert' && body.instance) {
+      const instanceName = body.instance || '';
+      const evolutionUrl = (process.env.EVOLUTION_API_URL || '').replace(/\/$/, '');
+      const apiKey = process.env.EVOLUTION_API_KEY || '';
+      if (!evolutionUrl) { console.error('[EVOLUTION] EVOLUTION_API_URL not configured'); continue; }
+
+      const evoAdapter = new EvolutionAdapter({ evolutionUrl, apiKey, instanceName });
+      const messages = evoAdapter.parseWebhook(body);
+
+      for (const msg of messages) {
+        const evoChannel = await getItem(keys.evolutionChannel(msg.tenantId));
+        if (!evoChannel?.active) { console.error(`[EVOLUTION] No active channel for ${msg.tenantId}`); continue; }
+        await processNormalizedMessage(msg, evoAdapter);
+      }
+      continue;
+    }
+
+    // Instagram
+    if (body.object === 'instagram') {
+      const igAdapter = new InstagramAdapter({ pageId: '', accessToken: '' });
+      const messages = igAdapter.parseWebhook(body);
+
+      for (const msg of messages) {
+        const pageId = msg.channelMetadata.pageId;
+        // Lookup canal IG por pageId
+        const channels = await queryByGSI('byChannelExternalId', 'channelExternalId', `ig_${pageId}`);
+        const channel = channels[0];
+        if (!channel) { console.error(`No IG channel for page ${pageId}`); continue; }
+
+        msg.tenantId = channel.tenantId as string;
+        igAdapter.setCredentials({ pageId, accessToken: channel.accessToken as string });
+        await processNormalizedMessage(msg, igAdapter);
+      }
+      continue;
+    }
+
+    // Facebook Messenger
+    if (body.object === 'page') {
+      const fbAdapter = new FacebookAdapter({ pageId: '', accessToken: '' });
+      const messages = fbAdapter.parseWebhook(body);
+
+      for (const msg of messages) {
+        const pageId = msg.channelMetadata.pageId;
+        const channels = await queryByGSI('byChannelExternalId', 'channelExternalId', `fb_${pageId}`);
+        const channel = channels[0];
+        if (!channel) { console.error(`No FB channel for page ${pageId}`); continue; }
+
+        msg.tenantId = channel.tenantId as string;
+        fbAdapter.setCredentials({ pageId, accessToken: channel.accessToken as string });
+        await processNormalizedMessage(msg, fbAdapter);
+      }
+      continue;
     }
   }
 };
 
 // ============================================================
-// FLUJO PRINCIPAL: mensaje entrante de WhatsApp
+// PIPELINE UNIFICADO: procesa NormalizedMessage con cualquier adapter
 // ============================================================
-async function processInboundMessage(msg: ParsedInboundMessage) {
-  console.log(`Inbound from ${msg.senderPhone} (${msg.type}): ${msg.textBody || msg.mediaId || ''}`);
+async function processNormalizedMessage(msg: NormalizedMessage, adapter: ChannelAdapter) {
+  const { tenantId, channel, externalUserId, externalMessageId, senderName } = msg;
+  const textBody = msg.content.text || '';
+  const channelId = msg.channelMetadata.phoneNumberId || msg.channelMetadata.sessionName || msg.channelMetadata.instanceName || msg.channelMetadata.pageId || '';
 
-  // Solo procesamos texto, audio e imagen
-  if (msg.type !== 'text' && msg.type !== 'audio' && msg.type !== 'image') {
-    console.log(`Skipping ${msg.type} message`);
-    return;
-  }
+  console.log(`[${channel}] Inbound from ${externalUserId}: ${textBody.slice(0, 80)}`);
 
-  // 1. Buscar canal (necesitamos accessToken antes de transcribir)
-  const channels = await queryByGSI('byChannelExternalId', 'channelExternalId', msg.phoneNumberId);
-  const channel = channels[0];
-  if (!channel) { console.error(`No channel for ${msg.phoneNumberId}`); return; }
+  // Helpers
+  const sendReply = (text: string) => adapter.sendText({ tenantId, externalUserId, text });
+  const sendImage = (imageUrl: string, caption?: string) => adapter.sendImage({ tenantId, externalUserId, imageUrl, caption });
 
-  const tenantId = channel.tenantId as string;
-  const accessToken = channel.accessToken as string;
-  const phoneNumberId = msg.phoneNumberId;
-
-  // 1b. Si es audio, transcribir con Groq
-  if (msg.type === 'audio' && msg.mediaId) {
+  // 1. Audio transcription (solo WhatsApp Meta por ahora)
+  let processedText = textBody;
+  if (msg.content.audio?.mediaId && channel === 'whatsapp') {
     try {
-      const transcription = await transcribeWhatsAppAudio(msg.mediaId, accessToken, msg.mimeType);
-      if (!transcription) {
-        console.log('Audio transcription empty, skipping');
-        return;
-      }
-      msg.textBody = transcription;
-      msg.type = 'text'; // a partir de acá se trata como texto
-      console.log(`[AUDIO] Transcribed to text: "${transcription.slice(0, 100)}"`);
+      const accessToken = (msg.channelMetadata as any).accessToken || (adapter as any).credentials?.accessToken;
+      const transcription = await transcribeWhatsAppAudio(msg.content.audio.mediaId, accessToken, msg.content.audio.mimeType);
+      if (!transcription) { console.log('Audio transcription empty, skipping'); return; }
+      processedText = transcription;
+      console.log(`[AUDIO] Transcribed: "${transcription.slice(0, 100)}"`);
     } catch (err: any) {
       console.error('[AUDIO] Transcription failed:', err.message);
-      await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, 'No pude escuchar el audio, me lo mandas de nuevo o en texto?');
+      await sendReply('No pude escuchar el audio, me lo mandas de nuevo o en texto?');
       return;
     }
   }
 
-  // 1c. Si es imagen, descargar para mandarla a Claude
+  // 2. Image download + downscale (WhatsApp Meta)
   let imageBase64: string | undefined;
-  let imageMimeType: string | undefined;
-  if (msg.type === 'image' && msg.mediaId) {
+  if (msg.content.image?.mediaId && channel === 'whatsapp') {
     try {
-      const imageBuffer = await downloadWhatsAppMedia(msg.mediaId, accessToken);
+      const accessToken = (adapter as any).credentials?.accessToken;
+      const rawBuffer = await downloadWhatsAppMedia(msg.content.image.mediaId, accessToken);
+      const imageBuffer = await sharp(rawBuffer)
+        .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
       imageBase64 = imageBuffer.toString('base64');
-      imageMimeType = (msg.mimeType || 'image/jpeg').split(';')[0].trim();
-      // Si no mandó texto con la imagen, poner un placeholder
-      if (!msg.textBody) msg.textBody = '[El cliente envio una imagen]';
-      console.log(`[IMAGE] Downloaded ${imageBuffer.length} bytes (${imageMimeType})`);
+      if (!processedText) processedText = '[El cliente envio una imagen]';
+      console.log(`[IMAGE] Downscaled ${rawBuffer.length} → ${imageBuffer.length} bytes`);
     } catch (err: any) {
-      console.error('[IMAGE] Download failed:', err.message);
-      // Continuar sin imagen si falla
+      console.error('[IMAGE] Download/downscale failed:', err.message);
     }
   }
 
-  if (!msg.textBody) return;
+  if (!processedText) return;
 
-  // 2. Deduplicación
-  const existingMsgs = await queryItems(`WAMSG#${msg.waMessageId}`);
-  if (existingMsgs.length > 0) { console.log(`Dup ${msg.waMessageId}`); return; }
+  // 3. Deduplicación
+  const existingMsgs = await queryItems(`WAMSG#${externalMessageId}`);
+  if (existingMsgs.length > 0) { console.log(`[${channel}] Dup ${externalMessageId}`); return; }
 
   const now = new Date().toISOString();
   const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // 3. Contacto
-  const contactKey = keys.contact(tenantId, msg.senderPhone);
+  // 4. Contacto
+  const contactKey = keys.contact(tenantId, externalUserId);
   const existingContact = await getItem(contactKey);
   await putItem({
     ...contactKey,
-    phone: msg.senderPhone,
-    contactPhone: msg.senderPhone,
-    name: msg.senderName || existingContact?.name || msg.senderPhone,
+    phone: externalUserId, contactPhone: externalUserId,
+    name: senderName || existingContact?.name || externalUserId,
     tags: existingContact?.tags || [],
     totalConversations: (existingContact?.totalConversations as number || 0) + (existingContact ? 0 : 1),
-    lastConversationAt: now,
-    createdAt: existingContact?.createdAt || now,
-    tenantId,
+    lastConversationAt: now, createdAt: existingContact?.createdAt || now, tenantId,
   });
 
-  // 4. Conversación
-  let conversation: any = null;
-  const contactConvs = await queryByGSI('byContactPhone', 'contactPhone', msg.senderPhone);
-  conversation = contactConvs.find(
+  // 5. Conversación
+  const contactConvs = await queryByGSI('byContactPhone', 'contactPhone', externalUserId);
+  const conversation = contactConvs.find(
     (c: any) => c.PK === `TENANT#${tenantId}` && c.SK?.startsWith('CONV#') && c.status !== 'archived'
   );
-
   const conversationId = conversation?.conversationId || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // 5. Guardar mensaje entrante
+  // 6. Guardar mensaje entrante
   await putItem({
     ...keys.message(conversationId, now, msgId),
     messageId: msgId, conversationId, tenantId,
     direction: 'inbound', sender: 'contact',
     type: imageBase64 ? 'image' : 'text',
-    content: msg.textBody,
-    ...(imageBase64 ? { imageBase64: imageBase64.slice(0, 200000), imageMimeType } : {}),
-    waMessageId: msg.waMessageId, timestamp: now,
+    content: processedText,
+    ...(imageBase64 ? { imageBase64: imageBase64.slice(0, 200000), imageMimeType: 'image/jpeg' } : {}),
+    waMessageId: externalMessageId, channel, timestamp: now,
   });
+  await putItem({ PK: `WAMSG#${externalMessageId}`, SK: 'MAP', conversationId, messageId: msgId, timestamp: now });
 
-  await putItem({
-    PK: `WAMSG#${msg.waMessageId}`, SK: 'MAP',
-    conversationId, messageId: msgId, timestamp: now,
-  });
-
-  // 6. Actualizar conversación
+  // 7. Actualizar conversación
   const unreadCount = (conversation?.unreadCount as number || 0) + 1;
   await putItem({
     ...keys.conversation(tenantId, conversationId),
-    conversationId, tenantId, channelPhoneNumberId: phoneNumberId,
-    contactPhone: msg.senderPhone,
-    contactName: msg.senderName || conversation?.contactName || msg.senderPhone,
+    conversationId, tenantId, channelPhoneNumberId: channelId,
+    contactPhone: externalUserId,
+    contactName: senderName || conversation?.contactName || externalUserId,
     status: 'open', tags: conversation?.tags || [],
     assignedTo: conversation?.assignedTo || 'bot',
     unreadCount, lastMessageAt: now,
-    lastMessagePreview: msg.textBody.slice(0, 100),
+    lastMessagePreview: processedText.slice(0, 100),
     createdAt: conversation?.createdAt || now,
+    channel,
   });
 
-  // 7. Read receipt
-  markAsRead(phoneNumberId, accessToken, msg.waMessageId);
+  // 8. Read receipt
+  adapter.markAsRead({ tenantId, externalMessageId }).catch(() => {});
 
-  // 8. Guards
-  const rateCheck = await checkRateLimit(msg.senderPhone);
-  if (!rateCheck.allowed) {
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, rateCheck.message!);
-    return;
-  }
-  if (detectInjection(msg.textBody)) {
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, INJECTION_RESPONSE);
-    return;
-  }
-  if (isCircuitOpen()) {
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, getFallbackMessage());
-    return;
-  }
+  // 9. Guards
+  const rateCheck = await checkRateLimit(externalUserId);
+  if (!rateCheck.allowed) { await sendReply(rateCheck.message!); return; }
+  const injectionCheck = await detectInjectionWithLLM(processedText, anthropic);
+  if (injectionCheck.isInjection) { await sendReply(INJECTION_RESPONSE); return; }
+  if (isCircuitOpen()) { await sendReply(getFallbackMessage()); return; }
 
-  // 9. Si asignado a humano, no responder
-  const assignedTo = conversation?.assignedTo || 'bot';
-  if (assignedTo !== 'bot') return;
+  // 10. Si asignado a humano, no responder
+  if ((conversation?.assignedTo || 'bot') !== 'bot') return;
 
-  // 10. Debounce 3s
+  // 11. Debounce 3s
   const msgTimestamp = Date.now();
-  await putItem({
-    PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST',
-    timestamp: msgTimestamp, ttl: Math.floor(Date.now() / 1000) + 60,
-  });
+  await putItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST', timestamp: msgTimestamp, ttl: Math.floor(Date.now() / 1000) + 60 });
   await new Promise(r => setTimeout(r, 3000));
   const debounceItem = await getItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST' });
   if (debounceItem && (debounceItem.timestamp as number) !== msgTimestamp) return;
 
-  // 11. Juntar mensajes pendientes (post-debounce)
+  // 12. Juntar mensajes pendientes
   const recentMsgs = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
   recentMsgs.reverse();
   let lastBotIdx = -1;
   for (let i = recentMsgs.length - 1; i >= 0; i--) {
     if ((recentMsgs[i] as any).sender === 'bot') { lastBotIdx = i; break; }
   }
-  const pendingInbound = recentMsgs
-    .slice(lastBotIdx + 1)
-    .filter((m: any) => m.direction === 'inbound')
-    .map((m: any) => m.content as string);
-  const combinedMessage = pendingInbound.length > 0 ? pendingInbound.join('. ') : msg.textBody;
+  const pendingInbound = recentMsgs.slice(lastBotIdx + 1).filter((m: any) => m.direction === 'inbound').map((m: any) => m.content as string);
+  const combinedMessage = pendingInbound.length > 0 ? pendingInbound.join('. ') : processedText;
 
   const freshConv = await getItem(keys.conversation(tenantId, conversationId));
   if (freshConv?.assignedTo && freshConv.assignedTo !== 'bot') return;
 
-  // 11b. Comando /reset — reiniciar conversación
+  // 13. Comando /reset
   if (combinedMessage.trim().toLowerCase() === '/reset') {
-    const resetMsg = 'Conversación reiniciada. ¡Hola! Contame qué buscás.';
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, resetMsg);
+    const resetMsg = 'Conversación reiniciada. Hola! Contame qué buscás.';
+    await sendReply(resetMsg);
     const resetNow = new Date().toISOString();
     const resetId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     await putItem({ ...keys.message(conversationId, resetNow, resetId), messageId: resetId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: resetMsg, status: 'sent', timestamp: resetNow });
-    await putItem({
-      ...keys.conversation(tenantId, conversationId),
-      conversationId, tenantId, channelPhoneNumberId: phoneNumberId,
-      contactPhone: msg.senderPhone, contactName: msg.senderName || conversation?.contactName || msg.senderPhone,
-      status: 'open', tags: [], assignedTo: 'bot', unreadCount: 0,
-      lastMessageAt: resetNow, lastMessagePreview: resetMsg,
-      createdAt: conversation?.createdAt || now,
-      convState: { recentProducts: [] },
-    });
-    console.log('Conversation reset via /reset');
+    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: channelId, contactPhone: externalUserId, contactName: senderName || conversation?.contactName || externalUserId, status: 'open', tags: [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: resetNow, lastMessagePreview: resetMsg, createdAt: conversation?.createdAt || now, convState: { recentProducts: [] }, channel });
     return;
   }
 
-  // 12. Config del agente
+  // 14. Config del agente
   const agent = await getItem(keys.agent(tenantId, 'main'));
   if (!agent?.active) return;
 
-  // 13. Escalamiento rápido
-  const escalationCheck = shouldEscalate(combinedMessage, {
-    needsHuman: false,
-    reboundCount: 0,
-  });
+  // 15. Escalamiento rápido
+  const escalationCheck = shouldEscalate(combinedMessage, { needsHuman: false, reboundCount: 0 });
   if (escalationCheck.escalate) {
     const escMsg = 'Te paso con alguien del equipo. Te van a contactar a la brevedad por este mismo chat.';
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, escMsg);
+    await sendReply(escMsg);
     const escNow = new Date().toISOString();
     const escId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     await putItem({ ...keys.message(conversationId, escNow, escId), messageId: escId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: escMsg, status: 'sent', timestamp: escNow });
@@ -719,38 +955,19 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
     return;
   }
 
-  // 14. Historial para Claude (últimos 20 mensajes)
+  // 16. Historial optimizado + pipeline IA
   const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
   historyItems.reverse();
+  const { history, summary: historySummary } = await buildOptimizedHistory(conversationId, historyItems);
 
-  // Construir mensajes alternando roles
-  const history: Anthropic.MessageParam[] = [];
-  for (const item of historyItems) {
-    const role = (item as any).direction === 'inbound' ? 'user' : 'assistant';
-    const content = (item as any).content as string;
-    if (history.length > 0 && history[history.length - 1].role === role) {
-      // Mergear contenido si mismo rol consecutivo
-      const last = history[history.length - 1];
-      last.content = (last.content as string) + '\n' + content;
-    } else {
-      history.push({ role, content });
-    }
-  }
-
-  // Asegurar que empiece con 'user'
-  if (history.length > 0 && history[0].role === 'assistant') {
-    history.shift();
-  }
-
-  // 15. PIPELINE SIMPLE: código busca → Claude responde
   try {
     const agentCfg = agent.agentConfig || agent;
-    const catalog = await loadCatalog(tenantId);
+    const catalog = await getCachedCatalog(tenantId);
 
-    // Cargar productos recientes del estado de la conversación
+    const contactMemory = await loadContactMemory(tenantId, externalUserId);
+    if (contactMemory) agentCfg._contactMemory = contactMemory;
+
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
-
-    // Detectar tipo de mensaje
     const trivial = isTrivialMessage(combinedMessage);
     const hasRecent = recentProducts.length > 0;
     const recentNames = recentProducts.map((p: any) => p.name);
@@ -759,430 +976,112 @@ async function processInboundMessage(msg: ParsedInboundMessage) {
     if (trivial) {
       const isSaludo = /^(hola|holaa+|hi|hey|buenas|buen[oa]s?\s*d[ií]as?|buenas\s*tardes|buenas\s*noches|que\s*tal)\s*[!.?]*$/i.test(combinedMessage.trim());
       if (isSaludo) recentProducts = [];
-      console.log(`Trivial message, skipping search. Saludo=${isSaludo}`);
     }
-    if (followUp) console.log(`Follow-up detected, skipping search. Recent: ${recentProducts.length}`);
 
-    // Búsqueda inicial SOLO si no es trivial NI seguimiento
     const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
-    if (!trivial && !followUp) console.log(`Initial search: ${newProducts.length} products for "${combinedMessage.slice(0, 80)}"`);
-    console.log(`Recent products in context: ${recentProducts.length}`);
-
-    // Separar: recientes como contexto, nuevos como frescos
     const contextOnly = dedupProducts(recentProducts).slice(0, 6);
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
+    const complexity: MessageComplexity = imageBase64 ? 'image' : trivial ? 'trivial' : followUp ? 'followup' : 'new_query';
 
-    // Claude genera respuesta (con tool use si necesita más productos)
     const { text: aiResponse, productsShown, freshProducts } = await generateResponse(
       combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
-      imageBase64 ? { base64: imageBase64, mimeType: imageMimeType || 'image/jpeg' } : undefined,
+      imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
+      complexity, historySummary,
     );
     recordSuccess();
 
-    const cleanResponse = cleanMarkdownForWhatsApp(aiResponse);
+    // Formatear respuesta según canal
+    const cleanResponse = formatOutbound(aiResponse, channel);
 
     // Enviar respuesta
-    const waResult = await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, cleanResponse);
-    console.log(`Sent: ${waResult.messageId}`);
+    const sendResult = await sendReply(cleanResponse);
+    console.log(`[${channel}] Sent: ${sendResult.externalMessageId}`);
 
-    // Enviar imágenes SOLO de productos FRESCOS que Claude nombró, NO repetir ya mostrados
+    // Enviar imágenes de productos frescos
     const normName = (s: string) => s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
-    const recentNamesNorm = new Set(recentProducts.map(p => normName(p.name)));
-    const allCandidatePool = [...recentProducts, ...freshProducts];
-    console.log(`[PHOTO] recent=${recentProducts.length}, fresh=${freshProducts.length}`);
     const seenNames = new Set<string>();
-    // Add recent names as already seen
     for (const p of recentProducts) seenNames.add(normName(p.name));
+    const allCandidatePool = [...recentProducts, ...freshProducts];
 
     const imagesToSend: typeof freshProducts = [];
     for (const p of freshProducts) {
       const nn = normName(p.name);
-      if (seenNames.has(nn)) { console.log(`[PHOTO] Skip (seen): ${p.name}`); continue; }
+      if (seenNames.has(nn)) continue;
       if (!p.imageUrl || !p.imageUrl.startsWith('http') || p.imageUrl.includes('empty-placeholder')) continue;
-      const pass = shouldSendPhoto(p, cleanResponse, allCandidatePool);
-      if (!pass) { console.log(`[PHOTO] Skip (filter): ${p.name}`); continue; }
-      seenNames.add(nn); // prevent dups within this turn
+      if (!shouldSendPhoto(p, cleanResponse, allCandidatePool)) continue;
+      seenNames.add(nn);
       imagesToSend.push(p);
       if (imagesToSend.length >= 3) break;
     }
-    console.log(`[PHOTO] Sending ${imagesToSend.length}: [${imagesToSend.map(p => p.name).join(' | ')}]`);
+
     for (const p of imagesToSend) {
-      const caption = `*${p.name}*\n${p.brand ? `${p.brand} | ` : ''}$${(p.priceNum || 0).toLocaleString('es-AR')}`;
-      await sendWhatsAppImage(phoneNumberId, accessToken, msg.senderPhone, p.imageUrl, caption);
-      // Guardar imagen como mensaje en DynamoDB
+      const captionBold = adapter.supportsMarkdown() ? `*${p.name}*` : p.name;
+      const caption = `${captionBold}\n${p.brand ? `${p.brand} | ` : ''}$${(p.priceNum || 0).toLocaleString('es-AR')}`;
+      await sendImage(p.imageUrl, caption);
       const imgNow = new Date().toISOString();
       const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       await putItem({
         ...keys.message(conversationId, imgNow, imgId),
         messageId: imgId, conversationId, tenantId,
         direction: 'outbound', sender: 'bot', type: 'image',
-        content: caption, imageUrl: p.imageUrl,
-        status: 'sent', timestamp: imgNow,
+        content: caption, imageUrl: p.imageUrl, status: 'sent', timestamp: imgNow,
       });
     }
 
-    // Guardar productos mostrados para el próximo turno (máx 8)
+    // Guardar mensaje y estado
     const productsToSave = dedupProducts(productsShown).slice(0, 8);
-
-    // Guardar mensaje saliente
     const replyNow = new Date().toISOString();
     const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     await putItem({
       ...keys.message(conversationId, replyNow, replyId),
       messageId: replyId, conversationId, tenantId,
       direction: 'outbound', sender: 'bot', type: 'text',
-      content: cleanResponse, waMessageId: waResult.messageId,
+      content: cleanResponse, waMessageId: sendResult.externalMessageId,
       status: 'sent', timestamp: replyNow,
     });
-    if (waResult.messageId) {
-      await putItem({ PK: `WAMSG#${waResult.messageId}`, SK: 'MAP', conversationId, messageId: replyId, timestamp: replyNow });
+    if (sendResult.externalMessageId) {
+      await putItem({ PK: `WAMSG#${sendResult.externalMessageId}`, SK: 'MAP', conversationId, messageId: replyId, timestamp: replyNow });
     }
 
-    // Actualizar conversación CON productos recientes en convState
     await putItem({
       ...keys.conversation(tenantId, conversationId),
-      conversationId, tenantId, channelPhoneNumberId: phoneNumberId,
-      contactPhone: msg.senderPhone,
-      contactName: msg.senderName || conversation?.contactName || msg.senderPhone,
+      conversationId, tenantId, channelPhoneNumberId: channelId,
+      contactPhone: externalUserId,
+      contactName: senderName || conversation?.contactName || externalUserId,
       status: 'open', tags: conversation?.tags || [],
       assignedTo: 'bot', unreadCount: 0,
       lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100),
       createdAt: conversation?.createdAt || now,
       convState: { recentProducts: productsToSave },
+      channel,
     });
 
-    console.log(`Done (${Date.now() - msgTimestamp}ms, ${productsToSave.length} products saved to state)`);
+    const totalLatency = Date.now() - msgTimestamp;
+    console.log(`[${channel}] Done (${totalLatency}ms, ${productsToSave.length} products)`);
+
+    // Log métricas del turno (async, non-blocking)
+    logTurnMetrics({
+      tenantId, conversationId, messageId: replyId, channel,
+      modelUsed: chooseModel(complexity),
+      complexity,
+      latencyMs: totalLatency,
+      inputTokens: 0, outputTokens: 0, // se loguearon por separado en [CACHE]
+      cacheReadTokens: 0, cacheCreateTokens: 0,
+      toolCallCount: 0,
+      productsShown: productsToSave.length,
+      imagessSent: imagesToSend.length,
+      escalated: false,
+    }).catch(() => {});
+
+    // Actualizar memoria (async)
+    const historyForMemory = historyItems.map((item: any) => ({
+      role: item.direction === 'inbound' ? 'user' : 'assistant',
+      content: item.content as string,
+    }));
+    updateContactMemory(tenantId, externalUserId, historyForMemory, anthropic).catch(() => {});
 
   } catch (err) {
-    console.error('Pipeline error:', err);
-    recordFailure();
-    await sendWhatsAppMessage(phoneNumberId, accessToken, msg.senderPhone, getFallbackMessage());
-  }
-}
-
-// ============================================================
-// WAHA: mensaje entrante
-// ============================================================
-async function processWahaMessage(msg: ParsedWahaMessage) {
-  console.log(`[WAHA] Inbound from ${msg.senderPhone}: ${msg.textBody.slice(0, 80)}`);
-
-  const { sessionName, senderPhone, senderName, waMessageId, textBody } = msg;
-
-  // 1. Resolver tenantId desde el reverse lookup (session → owner)
-  const ownerRecord = await getItem({ PK: `WAHA_SESSION#${sessionName}`, SK: 'OWNER' });
-  if (!ownerRecord?.tenantId) {
-    console.error(`[WAHA] No owner found for session ${sessionName}`);
-    return;
-  }
-  const tenantId = ownerRecord.tenantId as string;
-
-  // 1b. Verificar canal WAHA activo
-  const wahaChannel = await getItem(keys.wahaChannel(tenantId));
-  if (!wahaChannel?.active) {
-    console.error(`[WAHA] No active channel for tenant ${tenantId}`);
-    return;
-  }
-  const wahaUrl = (process.env.WAHA_URL || '').replace(/\/$/, '');
-  const apiKey = process.env.WAHA_API_KEY || '';
-  if (!wahaUrl) {
-    console.error('[WAHA] WAHA_URL not configured');
-    return;
-  }
-
-  const sendReply = (text: string) => sendWahaMessage(wahaUrl, apiKey, sessionName, senderPhone, text);
-
-  // 2. Deduplicación
-  const existingMsgs = await queryItems(`WAMSG#${waMessageId}`);
-  if (existingMsgs.length > 0) { console.log(`[WAHA] Dup ${waMessageId}`); return; }
-
-  const now = new Date().toISOString();
-  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // 3. Contacto
-  const contactKey = keys.contact(tenantId, senderPhone);
-  const existingContact = await getItem(contactKey);
-  await putItem({
-    ...contactKey,
-    phone: senderPhone,
-    contactPhone: senderPhone,
-    name: senderName || existingContact?.name || senderPhone,
-    tags: existingContact?.tags || [],
-    totalConversations: (existingContact?.totalConversations as number || 0) + (existingContact ? 0 : 1),
-    lastConversationAt: now,
-    createdAt: existingContact?.createdAt || now,
-    tenantId,
-  });
-
-  // 4. Conversación
-  const contactConvs = await queryByGSI('byContactPhone', 'contactPhone', senderPhone);
-  const conversation = contactConvs.find(
-    (c: any) => c.PK === `TENANT#${tenantId}` && c.SK?.startsWith('CONV#') && c.status !== 'archived'
-  );
-  const conversationId = conversation?.conversationId || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // 5. Guardar mensaje entrante
-  await putItem({
-    ...keys.message(conversationId, now, msgId),
-    messageId: msgId, conversationId, tenantId,
-    direction: 'inbound', sender: 'contact', type: 'text',
-    content: textBody, waMessageId, timestamp: now,
-  });
-  await putItem({ PK: `WAMSG#${waMessageId}`, SK: 'MAP', conversationId, messageId: msgId, timestamp: now });
-
-  // 6. Actualizar conversación
-  const unreadCount = (conversation?.unreadCount as number || 0) + 1;
-  await putItem({
-    ...keys.conversation(tenantId, conversationId),
-    conversationId, tenantId, channelPhoneNumberId: sessionName,
-    contactPhone: senderPhone,
-    contactName: senderName || conversation?.contactName || senderPhone,
-    status: 'open', tags: conversation?.tags || [],
-    assignedTo: conversation?.assignedTo || 'bot',
-    unreadCount, lastMessageAt: now,
-    lastMessagePreview: textBody.slice(0, 100),
-    createdAt: conversation?.createdAt || now,
-  });
-
-  // 7. Guards
-  const rateCheck = await checkRateLimit(senderPhone);
-  if (!rateCheck.allowed) { await sendReply(rateCheck.message!); return; }
-  if (detectInjection(textBody)) { await sendReply(INJECTION_RESPONSE); return; }
-  if (isCircuitOpen()) { await sendReply(getFallbackMessage()); return; }
-
-  // 8. Si asignado a humano, no responder
-  if ((conversation?.assignedTo || 'bot') !== 'bot') return;
-
-  // 9. Debounce 3s
-  const msgTimestamp = Date.now();
-  await putItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST', timestamp: msgTimestamp, ttl: Math.floor(Date.now() / 1000) + 60 });
-  await new Promise(r => setTimeout(r, 3000));
-  const debounceItem = await getItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST' });
-  if (debounceItem && (debounceItem.timestamp as number) !== msgTimestamp) return;
-
-  // 10. Juntar mensajes pendientes
-  const recentMsgs = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
-  recentMsgs.reverse();
-  let lastBotIdx = -1;
-  for (let i = recentMsgs.length - 1; i >= 0; i--) {
-    if ((recentMsgs[i] as any).sender === 'bot') { lastBotIdx = i; break; }
-  }
-  const pendingInbound = recentMsgs.slice(lastBotIdx + 1).filter((m: any) => m.direction === 'inbound').map((m: any) => m.content as string);
-  const combinedMessage = pendingInbound.length > 0 ? pendingInbound.join('. ') : textBody;
-
-  const freshConv = await getItem(keys.conversation(tenantId, conversationId));
-  if (freshConv?.assignedTo && freshConv.assignedTo !== 'bot') return;
-
-  // 11. Comando /reset
-  if (combinedMessage.trim().toLowerCase() === '/reset') {
-    const resetMsg = 'Conversación reiniciada. ¡Hola! Contame qué buscás.';
-    await sendReply(resetMsg);
-    const resetNow = new Date().toISOString();
-    const resetId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await putItem({ ...keys.message(conversationId, resetNow, resetId), messageId: resetId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: resetMsg, status: 'sent', timestamp: resetNow });
-    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: sessionName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: resetNow, lastMessagePreview: resetMsg, createdAt: conversation?.createdAt || now, convState: { recentProducts: [] } });
-    return;
-  }
-
-  // 12. Config del agente
-  const agent = await getItem(keys.agent(tenantId, 'main'));
-  if (!agent?.active) return;
-
-  // 13. Pipeline
-  try {
-    const agentCfg = agent.agentConfig || agent;
-    const catalog = await loadCatalog(tenantId);
-    let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
-
-    const trivial = isTrivialMessage(combinedMessage);
-    const hasRecent = recentProducts.length > 0;
-    const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentProducts.map((p: any) => p.name));
-    if (trivial && /^(hola|holaa+|hi|hey|buenas)/i.test(combinedMessage.trim())) recentProducts = [];
-
-    const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
-    const contextOnly = dedupProducts(recentProducts).slice(0, 6);
-    const freshOnly = dedupProducts(newProducts).slice(0, 4);
-
-    const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
-    historyItems.reverse();
-    const history: Anthropic.MessageParam[] = [];
-    for (const item of historyItems) {
-      const role = (item as any).direction === 'inbound' ? 'user' : 'assistant';
-      const content = (item as any).content as string;
-      if (history.length > 0 && history[history.length - 1].role === role) {
-        (history[history.length - 1].content as string);
-        history[history.length - 1] = { role, content: (history[history.length - 1].content as string) + '\n' + content };
-      } else {
-        history.push({ role, content });
-      }
-    }
-    if (history.length > 0 && history[0].role === 'assistant') history.shift();
-
-    const { text: aiResponse, productsShown } = await generateResponse(combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg, undefined);
-    recordSuccess();
-
-    const cleanResponse = cleanMarkdownForWhatsApp(aiResponse);
-    await sendReply(cleanResponse);
-
-    const replyNow = new Date().toISOString();
-    const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await putItem({ ...keys.message(conversationId, replyNow, replyId), messageId: replyId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: cleanResponse, status: 'sent', timestamp: replyNow });
-    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: sessionName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: conversation?.tags || [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100), createdAt: conversation?.createdAt || now, convState: { recentProducts: dedupProducts(productsShown).slice(0, 8) } });
-
-    console.log(`[WAHA] Done (${Date.now() - msgTimestamp}ms)`);
-  } catch (err) {
-    console.error('[WAHA] Pipeline error:', err);
-    recordFailure();
-    await sendReply(getFallbackMessage());
-  }
-}
-
-// ============================================================
-// EVOLUTION API: mensaje entrante
-// ============================================================
-async function processEvolutionMessage(msg: ParsedEvolutionMessage) {
-  console.log(`[EVOLUTION] Inbound from ${msg.senderPhone}: ${msg.textBody.slice(0, 80)}`);
-
-  const { instanceName, tenantId, senderPhone, senderName, waMessageId, textBody } = msg;
-
-  const evolutionChannel = await getItem(keys.evolutionChannel(tenantId));
-  if (!evolutionChannel?.active) {
-    console.error(`[EVOLUTION] No active channel for tenant ${tenantId}`);
-    return;
-  }
-  const evolutionUrl = (process.env.EVOLUTION_API_URL || '').replace(/\/$/, '');
-  const apiKey = process.env.EVOLUTION_API_KEY || '';
-  if (!evolutionUrl) { console.error('[EVOLUTION] EVOLUTION_API_URL not configured'); return; }
-
-  const sendReply = (text: string) => sendEvolutionMessage(evolutionUrl, apiKey, instanceName, senderPhone, text);
-
-  // Dedup
-  const existingMsgs = await queryItems(`WAMSG#${waMessageId}`);
-  if (existingMsgs.length > 0) { console.log(`[EVOLUTION] Dup ${waMessageId}`); return; }
-
-  const now = new Date().toISOString();
-  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // Contact
-  const contactKey = keys.contact(tenantId, senderPhone);
-  const existingContact = await getItem(contactKey);
-  await putItem({
-    ...contactKey, phone: senderPhone, contactPhone: senderPhone,
-    name: senderName || existingContact?.name || senderPhone,
-    tags: existingContact?.tags || [],
-    totalConversations: (existingContact?.totalConversations as number || 0) + (existingContact ? 0 : 1),
-    lastConversationAt: now, createdAt: existingContact?.createdAt || now, tenantId,
-  });
-
-  // Conversation
-  const contactConvs = await queryByGSI('byContactPhone', 'contactPhone', senderPhone);
-  const conversation = contactConvs.find(
-    (c: any) => c.PK === `TENANT#${tenantId}` && c.SK?.startsWith('CONV#') && c.status !== 'archived'
-  );
-  const conversationId = conversation?.conversationId || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // Save inbound message
-  await putItem({
-    ...keys.message(conversationId, now, msgId),
-    messageId: msgId, conversationId, tenantId,
-    direction: 'inbound', sender: 'contact', type: 'text',
-    content: textBody, waMessageId, timestamp: now,
-  });
-  await putItem({ PK: `WAMSG#${waMessageId}`, SK: 'MAP', conversationId, messageId: msgId, timestamp: now });
-
-  // Update conversation
-  const unreadCount = (conversation?.unreadCount as number || 0) + 1;
-  await putItem({
-    ...keys.conversation(tenantId, conversationId),
-    conversationId, tenantId, channelPhoneNumberId: instanceName,
-    contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone,
-    status: 'open', tags: conversation?.tags || [],
-    assignedTo: conversation?.assignedTo || 'bot',
-    unreadCount, lastMessageAt: now, lastMessagePreview: textBody.slice(0, 100),
-    createdAt: conversation?.createdAt || now,
-  });
-
-  // Guards
-  const rateCheck = await checkRateLimit(senderPhone);
-  if (!rateCheck.allowed) { await sendReply(rateCheck.message!); return; }
-  if (detectInjection(textBody)) { await sendReply(INJECTION_RESPONSE); return; }
-  if (isCircuitOpen()) { await sendReply(getFallbackMessage()); return; }
-  if ((conversation?.assignedTo || 'bot') !== 'bot') return;
-
-  // Debounce 3s
-  const msgTimestamp = Date.now();
-  await putItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST', timestamp: msgTimestamp, ttl: Math.floor(Date.now() / 1000) + 60 });
-  await new Promise(r => setTimeout(r, 3000));
-  const debounceItem = await getItem({ PK: `DEBOUNCE#${conversationId}`, SK: 'LATEST' });
-  if (debounceItem && (debounceItem.timestamp as number) !== msgTimestamp) return;
-
-  // Combine pending messages
-  const recentMsgs = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
-  recentMsgs.reverse();
-  let lastBotIdx = -1;
-  for (let i = recentMsgs.length - 1; i >= 0; i--) {
-    if ((recentMsgs[i] as any).sender === 'bot') { lastBotIdx = i; break; }
-  }
-  const pendingInbound = recentMsgs.slice(lastBotIdx + 1).filter((m: any) => m.direction === 'inbound').map((m: any) => m.content as string);
-  const combinedMessage = pendingInbound.length > 0 ? pendingInbound.join('. ') : textBody;
-
-  const freshConv = await getItem(keys.conversation(tenantId, conversationId));
-  if (freshConv?.assignedTo && freshConv.assignedTo !== 'bot') return;
-
-  if (combinedMessage.trim().toLowerCase() === '/reset') {
-    const resetMsg = 'Conversación reiniciada. Hola! Contame qué buscás.';
-    await sendReply(resetMsg);
-    const resetNow = new Date().toISOString();
-    const resetId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await putItem({ ...keys.message(conversationId, resetNow, resetId), messageId: resetId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: resetMsg, status: 'sent', timestamp: resetNow });
-    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: instanceName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: resetNow, lastMessagePreview: resetMsg, createdAt: conversation?.createdAt || now, convState: { recentProducts: [] } });
-    return;
-  }
-
-  const agent = await getItem(keys.agent(tenantId, 'main'));
-  if (!agent?.active) return;
-
-  try {
-    const agentCfg = agent.agentConfig || agent;
-    const catalog = await loadCatalog(tenantId);
-    let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
-
-    const trivial = isTrivialMessage(combinedMessage);
-    const hasRecent = recentProducts.length > 0;
-    const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentProducts.map((p: any) => p.name));
-    if (trivial && /^(hola|holaa+|hi|hey|buenas)/i.test(combinedMessage.trim())) recentProducts = [];
-
-    const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
-    const contextOnly = dedupProducts(recentProducts).slice(0, 6);
-    const freshOnly = dedupProducts(newProducts).slice(0, 4);
-
-    const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
-    historyItems.reverse();
-    const history: Anthropic.MessageParam[] = [];
-    for (const item of historyItems) {
-      const role = (item as any).direction === 'inbound' ? 'user' : 'assistant';
-      const content = (item as any).content as string;
-      if (history.length > 0 && history[history.length - 1].role === role) {
-        history[history.length - 1] = { role, content: (history[history.length - 1].content as string) + '\n' + content };
-      } else {
-        history.push({ role, content });
-      }
-    }
-    if (history.length > 0 && history[0].role === 'assistant') history.shift();
-
-    const { text: aiResponse, productsShown } = await generateResponse(combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg, undefined);
-    recordSuccess();
-
-    const cleanResponse = cleanMarkdownForWhatsApp(aiResponse);
-    await sendReply(cleanResponse);
-
-    const replyNow = new Date().toISOString();
-    const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await putItem({ ...keys.message(conversationId, replyNow, replyId), messageId: replyId, conversationId, tenantId, direction: 'outbound', sender: 'bot', type: 'text', content: cleanResponse, status: 'sent', timestamp: replyNow });
-    await putItem({ ...keys.conversation(tenantId, conversationId), conversationId, tenantId, channelPhoneNumberId: instanceName, contactPhone: senderPhone, contactName: senderName || conversation?.contactName || senderPhone, status: 'open', tags: conversation?.tags || [], assignedTo: 'bot', unreadCount: 0, lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100), createdAt: conversation?.createdAt || now, convState: { recentProducts: dedupProducts(productsShown).slice(0, 8) } });
-
-    console.log(`[EVOLUTION] Done (${Date.now() - msgTimestamp}ms)`);
-  } catch (err) {
-    console.error('[EVOLUTION] Pipeline error:', err);
+    console.error(`[${channel}] Pipeline error:`, err);
     recordFailure();
     await sendReply(getFallbackMessage());
   }
@@ -1191,11 +1090,11 @@ async function processEvolutionMessage(msg: ParsedEvolutionMessage) {
 // ============================================================
 // STATUS UPDATES
 // ============================================================
-async function processStatusUpdate(status: ParsedStatusUpdate) {
+async function processStatusUpdate(status: { waMessageId: string; status: string; recipientId: string; timestamp: string }) {
   const mapping = await getItem({ PK: `WAMSG#${status.waMessageId}`, SK: 'MAP' });
   if (!mapping) return;
 
-  const statusOrder = { sent: 1, delivered: 2, read: 3, failed: 0 };
+  const statusOrder: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 0 };
   const msgItems = await queryItems(
     `CONV#${mapping.conversationId}`,
     `MSG#${mapping.timestamp}#${mapping.messageId}`,
@@ -1260,25 +1159,14 @@ async function processTestMessage(body: {
   const agent = await getItem(keys.agent(tenantId, 'main'));
   if (!agent?.active) return;
 
-  // Historial
+  // Historial optimizado
   const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
   historyItems.reverse();
-  const history: Anthropic.MessageParam[] = [];
-  for (const item of historyItems) {
-    const role = (item as any).direction === 'inbound' ? 'user' : 'assistant';
-    const content = (item as any).content as string;
-    if (history.length > 0 && history[history.length - 1].role === role) {
-      const last = history[history.length - 1];
-      last.content = (last.content as string) + '\n' + content;
-    } else {
-      history.push({ role, content });
-    }
-  }
-  if (history.length > 0 && history[0].role === 'assistant') history.shift();
+  const { history, summary: historySummary } = await buildOptimizedHistory(conversationId, historyItems);
 
   try {
     const agentCfg = agent.agentConfig || agent;
-    const catalog = await loadCatalog(tenantId);
+    const catalog = await getCachedCatalog(tenantId);
 
     // Cargar productos recientes del estado
     let recentProducts: EnrichedProduct[] = (existingConv?.convState?.recentProducts || []) as EnrichedProduct[];
@@ -1292,11 +1180,12 @@ async function processTestMessage(body: {
     const contextOnly = dedupProducts(recentProducts).slice(0, 6);
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
 
+    const complexity: MessageComplexity = trivial ? 'trivial' : followUp ? 'followup' : 'new_query';
     const { text: aiResponse, productsShown } = await generateResponse(
-      message, history, contextOnly, freshOnly, catalog, agentCfg,
+      message, history, contextOnly, freshOnly, catalog, agentCfg, undefined, complexity, historySummary,
     );
 
-    const cleanResponse = cleanMarkdownForWhatsApp(aiResponse);
+    const cleanResponse = formatOutbound(aiResponse, 'whatsapp');
     const productsToSave = dedupProducts(productsShown).slice(0, 8);
     const replyNow = new Date().toISOString();
     const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

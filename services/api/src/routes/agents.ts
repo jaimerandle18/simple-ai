@@ -120,11 +120,12 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
     return json(agent || { agentConfig: {} });
   }
 
-  // PUT /agents/:type
+  // PUT /agents/:type — merge, no pisar businessConfig/onboardingHistory
   if (method === 'PUT' && agentMatch) {
     const body = JSON.parse(event.body || '{}');
     const existing = await getItem(keys.agent(tenantId, agentMatch[1])) || {};
     const agent = {
+      ...existing,
       ...keys.agent(tenantId, agentMatch[1]),
       tenantId, agentType: agentMatch[1],
       agentConfig: body.agentConfig || existing.agentConfig || {},
@@ -191,23 +192,35 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
 
     const activeRules = agentCfg.extraInstructions || HARDCODED_RULES_TC;
 
-    const systemPrompt = `Sos ${name}, vendedor virtual por WhatsApp de un comercio argentino.${web ? ` Web: ${web}` : ''}
+    // === PROMPT CACHING ===
+    const stableBlock = `Sos un vendedor virtual por WhatsApp de un comercio argentino.
 
 # TONO
 Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
 NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
 
-# REGLAS
-${activeRules}
+# REGLAS BASE
+${HARDCODED_RULES_TC}`;
+
+    const tenantBlock = `# IDENTIDAD
+Nombre: ${name}${web ? `. Web: ${web}` : ''}
+
+${activeRules !== HARDCODED_RULES_TC ? `# REGLAS DEL NEGOCIO\n${activeRules}` : ''}
 
 # CATEGORÍAS
 ${categories}
 ${agentCfg.promotions ? `\n# PROMOCIONES\n${agentCfg.promotions}` : ''}
 ${agentCfg.businessHours ? `\n# HORARIO\n${agentCfg.businessHours}` : ''}
-${agentCfg.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA\n${agentCfg.welcomeMessage}` : ''}
+${agentCfg.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA\n${agentCfg.welcomeMessage}` : ''}`;
 
-# PRODUCTOS_DISPONIBLES
+    const productsBlockTC = `# PRODUCTOS_DISPONIBLES
 ${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto)'}`;
+
+    const systemPromptBlocks: Anthropic.TextBlockParam[] = [
+      { type: 'text', text: stableBlock, cache_control: { type: 'ephemeral' } } as any,
+      { type: 'text', text: tenantBlock, cache_control: { type: 'ephemeral' } } as any,
+      { type: 'text', text: productsBlockTC },
+    ];
 
     // Build messages
     const msgs: Anthropic.MessageParam[] = [];
@@ -231,7 +244,7 @@ ${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto
       for (let round = 0; round < 3; round++) {
         const res = await anthropic.messages.create({
           model: 'claude-sonnet-4-6', max_tokens: 500,
-          system: systemPrompt, tools: TOOLS, messages: msgs,
+          system: systemPromptBlocks, tools: TOOLS, messages: msgs,
         });
 
         if (res.stop_reason === 'end_turn') {
@@ -397,9 +410,21 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
 
     const cfg = agent.agentConfig || {};
     cfg.extraInstructions = proposedRules.slice(0, 3000);
-    await putItem({ ...agent, agentConfig: cfg, updatedAt: new Date().toISOString() });
 
-    return json({ ok: true });
+    // Sync: si hay businessConfig, actualizar los campos que cambiaron
+    const businessConfig = agent.businessConfig || {};
+    const updatedBusinessConfig = await syncRulesToBusinessConfig(businessConfig, proposedRules);
+
+    const now = new Date().toISOString();
+    await putItem({
+      ...agent,
+      agentConfig: cfg,
+      businessConfig: updatedBusinessConfig,
+      lastConfigChange: now,
+      updatedAt: now,
+    });
+
+    return json({ ok: true, lastConfigChange: now, needsVerification: true });
   }
 
   // ============================================================
@@ -489,4 +514,61 @@ JSON: {"products":[...],"businessInfo":"..."}`,
   }
 
   return error('Not found', 404);
+}
+
+// ============================================================
+// SYNC: reglas de feedback → businessConfig
+// Cuando se confirman correcciones, Haiku detecta si algún campo
+// del businessConfig necesita actualizarse y devuelve los updates.
+// ============================================================
+async function syncRulesToBusinessConfig(
+  businessConfig: any,
+  newRules: string,
+): Promise<any> {
+  if (!businessConfig || Object.keys(businessConfig).length === 0) return businessConfig;
+
+  try {
+    const res = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 500,
+      system: `Sos un sincronizador de datos. Te doy la configuracion actual de un negocio (businessConfig) y las reglas nuevas del prompt.
+
+Tu trabajo: detectar si las reglas nuevas CONTRADICEN o ACTUALIZAN algun campo del businessConfig. Si es asi, devolver los campos actualizados.
+
+Devolvé JSON con SOLO los campos que cambiaron, usando la misma estructura del businessConfig.
+Si nada cambió, devolvé: {}
+
+Ejemplos:
+- Regla dice "garantia 30 dias" pero businessConfig.politicas.garantia dice "no aplica" → {"politicas": {"garantia": "30 dias"}}
+- Regla dice "ahora aceptamos MercadoPago" pero businessConfig.pago.metodos no lo incluye → {"pago": {"metodos": "..., MercadoPago"}}
+- Regla dice "no hacer descuentos" → no contradice nada estructural → {}
+
+SOLO devolvé el JSON, nada mas.`,
+      messages: [{
+        role: 'user',
+        content: `BUSINESS CONFIG ACTUAL:\n${JSON.stringify(businessConfig, null, 2)}\n\nREGLAS NUEVAS:\n${newRules}`,
+      }],
+    });
+
+    const text = res.content.find(b => b.type === 'text')?.text || '{}';
+    const updates = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+    if (!updates || Object.keys(updates).length === 0) return businessConfig;
+
+    // Merge profundo
+    const merged = { ...businessConfig };
+    for (const [section, fields] of Object.entries(updates)) {
+      if (typeof fields === 'object' && fields !== null && !Array.isArray(fields)) {
+        merged[section] = { ...(merged[section] || {}), ...(fields as Record<string, any>) };
+      } else {
+        merged[section] = fields;
+      }
+    }
+
+    console.log(`[SYNC] businessConfig updated: ${Object.keys(updates).join(', ')}`);
+    return merged;
+  } catch (err) {
+    console.error('[SYNC] Failed to sync rules to businessConfig:', err);
+    return businessConfig;
+  }
 }

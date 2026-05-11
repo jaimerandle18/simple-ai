@@ -178,11 +178,20 @@ COMPOSE`,
       memorySize: 128,
     });
 
+    // Lambda Layer para sharp (native module, no se puede bundlear con esbuild)
+    // Buildear con: ./scripts/build-sharp-layer.sh
+    const sharpLayer = new lambda.LayerVersion(this, 'SharpLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../layers/sharp')),
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
+      description: 'Sharp image processing library for image downscaling',
+    });
+
     const messageProcessorLambda = new lambda.Function(this, 'MessageProcessorLambda', {
       functionName: `simple-ai-message-processor-${stage}`,
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../services/message-processor/dist')),
+      layers: [sharpLayer],
       environment: {
         TABLE_NAME: table.tableName,
         BUCKET_NAME: bucket.bucketName,

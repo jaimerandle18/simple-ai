@@ -13,42 +13,21 @@ interface AttachedFile {
 }
 
 interface AgentConfig {
-  assistantName: string;
-  tone: string;
-  welcomeMessage: string;
-  promotions: string;
-  businessHours: string;
-  extraInstructions: string;
   websiteUrl: string;
   websiteScraped: boolean;
   productsCount: number;
   attachedFiles?: AttachedFile[];
 }
 
-const toneOptions = [
-  { value: 'formal', label: 'Formal — profesional y respetuoso' },
-  { value: 'friendly', label: 'Amigable — cercano y cálido' },
-  { value: 'casual', label: 'Casual — relajado, usa emojis' },
-  { value: 'sales', label: 'Vendedor — persuasivo y proactivo' },
-];
-
-export default function AgentPage() {
+export default function ScraperPage() {
   const { auth } = useAuth();
   const tenantId = auth?.tenantId;
 
   const [config, setConfig] = useState<AgentConfig>({
-    assistantName: '',
-    tone: 'friendly',
-    welcomeMessage: '',
-    promotions: '',
-    businessHours: '',
-    extraInstructions: '',
     websiteUrl: '',
     websiteScraped: false,
     productsCount: 0,
   });
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
   const [scrapeResult, setScrapeResult] = useState('');
@@ -59,31 +38,11 @@ export default function AgentPage() {
     if (!tenantId) return;
     api('/agents/main', { tenantId })
       .then((data) => {
-        if (data.agentConfig) {
-          setConfig(data.agentConfig);
-        }
+        if (data.agentConfig) setConfig(data.agentConfig);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [tenantId]);
-
-  const handleSave = async () => {
-    if (!tenantId) return;
-    setSaving(true);
-    setSaved(false);
-    try {
-      await api('/agents/main', {
-        method: 'PUT',
-        tenantId,
-        body: { agentConfig: config },
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      console.error(err);
-    }
-    setSaving(false);
-  };
 
   const handleScrape = async () => {
     if (!tenantId || !config.websiteUrl) return;
@@ -100,9 +59,9 @@ export default function AgentPage() {
         websiteScraped: true,
         productsCount: result.productsCount,
       }));
-      setScrapeResult(`Se encontraron ${result.productsCount} productos/servicios`);
+      setScrapeResult(`Se encontraron ${result.productsCount} productos`);
     } catch (err: any) {
-      setScrapeResult('Error al scrapear: ' + err.message);
+      setScrapeResult('Error al escanear: ' + err.message);
     }
     setScraping(false);
   };
@@ -120,40 +79,31 @@ export default function AgentPage() {
     setUploading(true);
     setUploadMsg('');
     try {
-      // 1. Pedir presigned URL
       const { uploadUrl, fileKey, fileName } = await api('/files/upload-url', {
-        method: 'POST',
-        tenantId,
+        method: 'POST', tenantId,
         body: { fileName: file.name, contentType: file.type },
       });
 
-      // 2. Subir a S3
       await fetch(uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': file.type || 'application/octet-stream' },
         body: file,
       });
 
-      // 3. Procesar (extraer texto y asociar al agente)
       const result = await api('/files/process', {
-        method: 'POST',
-        tenantId,
+        method: 'POST', tenantId,
         body: { fileKey, fileName },
       });
 
-      // 4. Actualizar estado local
       const newFile: AttachedFile = {
-        fileKey,
-        extractedKey: result.extractedKey,
-        fileName,
-        textLength: result.textLength,
-        uploadedAt: new Date().toISOString(),
+        fileKey, extractedKey: result.extractedKey, fileName,
+        textLength: result.textLength, uploadedAt: new Date().toISOString(),
       };
       setConfig(prev => ({
         ...prev,
         attachedFiles: [...(prev.attachedFiles || []), newFile],
       }));
-      setUploadMsg(`"${fileName}" procesado (${Math.round(result.textLength / 1000)}k caracteres extraídos)`);
+      setUploadMsg(`"${fileName}" procesado (${Math.round(result.textLength / 1000)}k caracteres)`);
     } catch (err: any) {
       setUploadMsg('Error: ' + err.message);
     }
@@ -164,11 +114,7 @@ export default function AgentPage() {
   const handleFileDelete = async (fileKey: string) => {
     if (!tenantId) return;
     try {
-      await api('/files/detach', {
-        method: 'DELETE',
-        tenantId,
-        body: { fileKey },
-      });
+      await api('/files/detach', { method: 'DELETE', tenantId, body: { fileKey } });
       setConfig(prev => ({
         ...prev,
         attachedFiles: (prev.attachedFiles || []).filter(f => f.fileKey !== fileKey),
@@ -190,8 +136,8 @@ export default function AgentPage() {
     <div className="p-4 md:p-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 md:mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Agente IA</h1>
-          <p className="text-gray-500 text-sm mt-1">Configurá cómo responde tu asistente a los clientes</p>
+          <h1 className="text-2xl font-bold text-gray-900">Catalogo de productos</h1>
+          <p className="text-gray-500 text-sm mt-1">Escanea tu web para cargar productos, o subi archivos con info de tu negocio</p>
         </div>
         <a
           href="/dashboard/agent/test"
@@ -205,96 +151,11 @@ export default function AgentPage() {
       </div>
 
       <div className="max-w-3xl space-y-6">
-        {/* Identity */}
+        {/* Scraper */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Identidad del asistente</h2>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del asistente</label>
-              <input
-                type="text"
-                value={config.assistantName}
-                onChange={(e) => setConfig({ ...config, assistantName: e.target.value })}
-                placeholder="Ej: Luna, Sofi, Asistente de Tu Negocio"
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Tono de comunicación</label>
-              <select
-                value={config.tone}
-                onChange={(e) => setConfig({ ...config, tone: e.target.value })}
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500"
-              >
-                {toneOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mensaje de bienvenida</label>
-              <p className="text-xs text-gray-400 mb-1">El primer mensaje que envía el agente cuando un cliente nuevo escribe.</p>
-              <textarea
-                value={config.welcomeMessage}
-                onChange={(e) => setConfig({ ...config, welcomeMessage: e.target.value })}
-                rows={2}
-                placeholder="Ej: ¡Hola! Soy Luna, la asistente de Tu Negocio. ¿En qué puedo ayudarte?"
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 resize-y"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Business Info */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Información del negocio</h2>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Promociones activas</label>
-              <p className="text-xs text-gray-400 mb-1">El agente las mencionará cuando sea relevante.</p>
-              <textarea
-                value={config.promotions}
-                onChange={(e) => setConfig({ ...config, promotions: e.target.value })}
-                rows={3}
-                placeholder="Ej: 20% de descuento en la segunda unidad. Envío gratis en compras mayores a $50.000."
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 resize-y"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Horario de atención</label>
-              <input
-                type="text"
-                value={config.businessHours}
-                onChange={(e) => setConfig({ ...config, businessHours: e.target.value })}
-                placeholder="Ej: Lunes a viernes de 9 a 18hs, sábados de 10 a 14hs"
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Instrucciones adicionales</label>
-              <p className="text-xs text-gray-400 mb-1">Reglas o información extra que el agente debe saber.</p>
-              <textarea
-                value={config.extraInstructions}
-                onChange={(e) => setConfig({ ...config, extraInstructions: e.target.value })}
-                rows={3}
-                placeholder="Ej: No ofrecer descuentos adicionales. Siempre sugerir agendar una llamada para consultas complejas."
-                className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 resize-y"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Website Scraping */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-gray-900 mb-2">Productos y servicios</h2>
+          <h2 className="text-base font-semibold text-gray-900 mb-2">Escanear tu web</h2>
           <p className="text-xs text-gray-500 mb-4">
-            Ingresá la URL de tu web y nosotros extraemos los productos automáticamente. El agente los usa como referencia cuando un cliente pregunta.
+            Ingresa la URL de tu tienda y extraemos los productos automaticamente. El agente los usa para responder cuando un cliente pregunta.
           </p>
 
           <div className="flex gap-3">
@@ -313,7 +174,7 @@ export default function AgentPage() {
               {scraping ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Escaneando {config.websiteUrl}...
+                  Escaneando...
                 </>
               ) : (
                 'Escanear web'
@@ -326,7 +187,7 @@ export default function AgentPage() {
               <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
               </svg>
-              <span className="text-sm text-emerald-700">Web escaneada — {config.productsCount} productos/servicios encontrados</span>
+              <span className="text-sm text-emerald-700">Web escaneada — {config.productsCount} productos encontrados</span>
             </div>
           )}
 
@@ -335,14 +196,13 @@ export default function AgentPage() {
           )}
         </div>
 
-        {/* Archivos de referencia */}
+        {/* Archivos */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           <h2 className="text-base font-semibold text-gray-900 mb-2">Archivos de referencia</h2>
           <p className="text-xs text-gray-500 mb-4">
-            Subí archivos con info de tu negocio (FAQ, políticas, catálogos). El agente los usa para responder mejor.
+            Subi archivos con info de tu negocio (FAQ, politicas, catalogos). El agente los usa para responder mejor.
           </p>
 
-          {/* Lista de archivos */}
           {(config.attachedFiles || []).length > 0 && (
             <div className="space-y-2 mb-4">
               {(config.attachedFiles || []).map((file) => (
@@ -353,13 +213,13 @@ export default function AgentPage() {
                     </svg>
                     <div>
                       <p className="text-sm font-medium text-gray-900">{file.fileName}</p>
-                      <p className="text-xs text-gray-400">{Math.round(file.textLength / 1000)}k caracteres extraídos</p>
+                      <p className="text-xs text-gray-400">{Math.round(file.textLength / 1000)}k caracteres</p>
                     </div>
                   </div>
                   <button
                     onClick={() => handleFileDelete(file.fileKey)}
                     className="text-red-400 hover:text-red-600 p-1"
-                    title="Eliminar archivo"
+                    title="Eliminar"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
@@ -370,7 +230,6 @@ export default function AgentPage() {
             </div>
           )}
 
-          {/* Upload button */}
           <label className={`inline-flex items-center gap-2 border border-gray-300 text-gray-700 text-sm font-medium py-2 px-4 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
             {uploading ? (
               <>
@@ -400,25 +259,6 @@ export default function AgentPage() {
             <p className={`mt-2 text-sm ${uploadMsg.startsWith('Error') ? 'text-red-600' : 'text-emerald-600'}`}>
               {uploadMsg}
             </p>
-          )}
-        </div>
-
-        {/* Save */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-gradient-to-r from-primary-600 to-secondary-600 text-white font-medium py-2.5 px-6 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all disabled:opacity-50"
-          >
-            {saving ? 'Guardando...' : 'Guardar cambios'}
-          </button>
-          {saved && (
-            <span className="text-sm text-emerald-600 flex items-center gap-1">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-              </svg>
-              Guardado
-            </span>
           )}
         </div>
       </div>
