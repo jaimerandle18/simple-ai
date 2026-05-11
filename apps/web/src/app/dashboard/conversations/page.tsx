@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
-import { RegressionModal } from '@/components/dashboard/RegressionModal';
+// RegressionPill lives in layout — we dispatch events to trigger it
 
 interface FeedbackTarget {
   messageId: string;
@@ -73,14 +73,6 @@ export default function ConversationsPage() {
       .catch(console.error)
       .finally(() => setLoading(false));
 
-    // Chequear si hay un run pendiente de decision
-    api('/regression/pending', { tenantId })
-      .then(data => {
-        if (data.run?.runId && !data.run.decision) {
-          setRegressionRunId(data.run.runId);
-        }
-      })
-      .catch(() => {});
   }, [tenantId]);
 
   useEffect(() => {
@@ -92,9 +84,25 @@ export default function ConversationsPage() {
       .finally(() => setLoadingMsgs(false));
   }, [selectedId, tenantId]);
 
+  const prevMsgCount = useRef(0);
+  const initialScrollDone = useRef(false);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Solo scrollear: al cargar por primera vez, o cuando llega un mensaje nuevo
+    if (messages.length > 0 && !initialScrollDone.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      initialScrollDone.current = true;
+    } else if (messages.length > prevMsgCount.current && prevMsgCount.current > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMsgCount.current = messages.length;
   }, [messages]);
+
+  // Reset cuando cambia de conversación
+  useEffect(() => {
+    initialScrollDone.current = false;
+    prevMsgCount.current = 0;
+  }, [selectedId]);
 
   // Polling for new messages
   useEffect(() => {
@@ -147,8 +155,6 @@ export default function ConversationsPage() {
     }
   };
 
-  const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
-
   const confirmFeedback = async () => {
     if (!feedbackPreview || !tenantId) return;
     setFeedbackStep('loading');
@@ -174,7 +180,7 @@ export default function ConversationsPage() {
       } else {
         // Tiene goldens: mostrar modal bloqueante
         closeFeedback();
-        setRegressionRunId(regResult.runId);
+        window.dispatchEvent(new CustomEvent('regression-started', { detail: { runId: regResult.runId } }));
       }
     } catch (err) {
       console.error(err);
@@ -183,12 +189,6 @@ export default function ConversationsPage() {
     }
   };
 
-  const handleRegressionDone = (decision: 'apply' | 'revert') => {
-    setRegressionRunId(null);
-    if (decision === 'apply') {
-      window.dispatchEvent(new Event('config-changed'));
-    }
-  };
 
   const updateConv = (convId: string, updates: Partial<Conversation>) => {
     setConversations(prev => prev.map(c =>
@@ -701,10 +701,6 @@ export default function ConversationsPage() {
         )}
       </div>
 
-      {/* Modal bloqueante de regression testing */}
-      {regressionRunId && (
-        <RegressionModal runId={regressionRunId} onDone={handleRegressionDone} />
-      )}
     </div>
   );
 }

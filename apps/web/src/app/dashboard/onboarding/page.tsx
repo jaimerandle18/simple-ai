@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
-import { RegressionModal } from '@/components/dashboard/RegressionModal';
 import Link from 'next/link';
 
 interface Message {
@@ -26,7 +25,6 @@ export default function OnboardingPage() {
   const [promptLoading, setPromptLoading] = useState(false);
   const [testResults, setTestResults] = useState<Array<{ input: string; output: string }> | null>(null);
   const [testLoading, setTestLoading] = useState(false);
-  const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const allSections = ['business', 'bot_persona', 'horarios', 'pago', 'envio', 'politicas', 'promos', 'escalamiento'];
@@ -80,7 +78,7 @@ export default function OnboardingPage() {
           body: { oldPrompt: '', newPrompt: 'onboarding_change' },
         });
         if (!regResult.skipped && regResult.runId) {
-          setRegressionRunId(regResult.runId);
+          window.dispatchEvent(new CustomEvent('regression-started', { detail: { runId: regResult.runId } }));
         }
       } catch { /* sin goldens o error, no bloquear */ }
     } catch (err: any) {
@@ -312,17 +310,6 @@ export default function OnboardingPage() {
         </div>
       </div>
 
-      {regressionRunId && (
-        <RegressionModal
-          runId={regressionRunId}
-          onDone={(decision) => {
-            setRegressionRunId(null);
-            if (decision === 'apply') {
-              window.dispatchEvent(new Event('config-changed'));
-            }
-          }}
-        />
-      )}
     </div>
   );
 }

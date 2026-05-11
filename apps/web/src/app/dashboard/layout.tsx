@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react';
 import { redirect } from 'next/navigation';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { VerificationBanner } from '@/components/dashboard/VerificationBanner';
+import { RegressionPill } from '@/components/dashboard/RegressionPill';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
@@ -48,6 +49,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <VerificationBanner />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>
+
+      <RegressionPill />
     </div>
   );
 }
