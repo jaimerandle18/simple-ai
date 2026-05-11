@@ -5,24 +5,24 @@ const plans = [
     name: 'Básico',
     price: '14.990',
     period: '/mes',
-    description: 'Para negocios que están empezando con WhatsApp.',
+    description: 'Para negocios que están empezando a automatizar su atención.',
     features: [
-      '1 número de WhatsApp',
+      '1 canal conectado',
       '500 conversaciones/mes',
       'Agente de IA básico',
       'Panel de conversaciones',
       'Soporte por email',
     ],
-    cta: 'Empezar gratis',
+    cta: 'Empezar ahora',
     highlighted: false,
   },
   {
     name: 'Profesional',
     price: '29.990',
     period: '/mes',
-    description: 'Para negocios que quieren escalar su atención.',
+    description: 'Para negocios que quieren escalar su atención al cliente.',
     features: [
-      '1 número de WhatsApp',
+      'Múltiples canales (WhatsApp, Instagram, Facebook)',
       'Conversaciones ilimitadas',
       'Agente de IA avanzado',
       'Subida de archivos como contexto',
@@ -30,7 +30,7 @@ const plans = [
       'Métricas y reportes',
       'Soporte prioritario',
     ],
-    cta: 'Empezar gratis',
+    cta: 'Empezar ahora',
     highlighted: true,
   },
 ];
@@ -44,7 +44,7 @@ export function Pricing() {
             Planes simples, sin sorpresas
           </h2>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Empezá gratis y escalá cuando lo necesites. Todos los planes incluyen 14 días de prueba.
+            Empezá con 14 días de prueba gratis y escalá cuando lo necesites.
           </p>
         </div>
 

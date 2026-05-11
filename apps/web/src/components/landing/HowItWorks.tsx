@@ -1,18 +1,18 @@
 const steps = [
   {
     number: '01',
-    title: 'Conectá tu WhatsApp',
-    description: 'Vinculá tu cuenta de WhatsApp Business en 3 clicks con el proceso oficial de Meta.',
+    title: 'Conectá tu canal',
+    description: 'Vinculá WhatsApp, Instagram, Facebook o cualquier plataforma en minutos. Sin conocimientos técnicos.',
   },
   {
     number: '02',
     title: 'Configurá tu agente',
-    description: 'Describí tu negocio, subí tus archivos y nuestro asistente de IA te ayuda a crear el prompt perfecto.',
+    description: 'Describí tu negocio, subí tus archivos y nuestro asistente de IA te ayuda a crear el agente perfecto para tu negocio.',
   },
   {
     number: '03',
     title: 'Dejá que la IA trabaje',
-    description: 'El agente responde automáticamente a tus clientes. Vos solo supervisás desde el panel.',
+    description: 'El agente responde automáticamente a tus clientes en todos tus canales. Vos solo supervisás desde el panel.',
   },
 ];
 

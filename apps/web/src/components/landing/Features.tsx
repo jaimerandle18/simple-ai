@@ -6,7 +6,7 @@ const features = [
       </svg>
     ),
     title: 'Respuestas automáticas 24/7',
-    description: 'Tu agente de IA responde a cada mensaje al instante, sin importar la hora. Nunca pierdas un cliente por falta de respuesta.',
+    description: 'Tu agente de IA responde a cada mensaje al instante, sin importar la hora ni el canal. Nunca pierdas un cliente por falta de respuesta.',
   },
   {
     icon: (
@@ -15,7 +15,7 @@ const features = [
       </svg>
     ),
     title: 'IA entrenada con tu negocio',
-    description: 'Subí tus documentos, precios y políticas. El agente responde como si fuera parte de tu equipo, con información precisa.',
+    description: 'Subí tus documentos, precios y políticas. El agente responde como si fuera parte de tu equipo, con información precisa y actualizada.',
   },
   {
     icon: (
@@ -24,7 +24,7 @@ const features = [
       </svg>
     ),
     title: 'Panel de métricas',
-    description: 'Visualiza conversaciones, tiempos de respuesta, satisfacción y volumen de mensajes en tiempo real.',
+    description: 'Visualizá conversaciones, tiempos de respuesta, satisfacción y volumen de mensajes en tiempo real desde todos tus canales.',
   },
   {
     icon: (
@@ -34,7 +34,7 @@ const features = [
       </svg>
     ),
     title: 'Catalogación inteligente',
-    description: 'Etiquetá y clasificá conversaciones automáticamente. Organizá tus leads sin esfuerzo.',
+    description: 'Etiquetá y clasificá conversaciones automáticamente. Organizá tus leads sin esfuerzo, sin importar de qué canal lleguen.',
   },
   {
     icon: (
@@ -43,16 +43,16 @@ const features = [
       </svg>
     ),
     title: 'Vista unificada',
-    description: 'Todas las conversaciones de WhatsApp en un solo lugar. Intervení manualmente cuando sea necesario.',
+    description: 'Todas las conversaciones de todos tus canales en un solo lugar. Intervení manualmente cuando sea necesario.',
   },
   {
     icon: (
       <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
       </svg>
     ),
-    title: 'API oficial de WhatsApp',
-    description: 'Conexión directa con la API de Meta. Sin caídas, sin riesgo de baneo. Tu negocio siempre en línea.',
+    title: 'Multi-plataforma',
+    description: 'WhatsApp, Instagram, Facebook y más. Un solo agente que atiende todos tus canales con la misma calidad y coherencia.',
   },
 ];
 
@@ -65,7 +65,7 @@ export function Features() {
             Todo lo que necesitás para automatizar tu atención
           </h2>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Una plataforma completa para gestionar y automatizar tus conversaciones de WhatsApp con inteligencia artificial.
+            Una plataforma completa para gestionar y automatizar tus conversaciones con agentes de inteligencia artificial, en todos tus canales de comunicación.
           </p>
         </div>
 

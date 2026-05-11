@@ -12,13 +12,13 @@ export function Hero() {
               Potenciado por Inteligencia Artificial
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-gray-900 leading-tight mb-6">
-              Automatiza tu{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-600 to-secondary-600">WhatsApp</span>{' '}
+              Agentes de{' '}
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-600 to-secondary-600">comunicación y ventas</span>{' '}
               con IA
             </h1>
             <p className="text-lg text-gray-600 mb-8 max-w-lg">
-              Responde a tus clientes 24/7 con un agente inteligente que conoce tu negocio.
-              Más ventas, menos esfuerzo.
+              Atendé a tus clientes 24/7 con agentes inteligentes que conocen tu negocio.
+              WhatsApp, Instagram, Facebook y cualquier plataforma. Más ventas, menos esfuerzo.
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
               <Link
@@ -42,7 +42,7 @@ export function Hero() {
                 <svg className="w-4 h-4 text-primary-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                 </svg>
-                Sin tarjeta de crédito
+                14 días de prueba gratis
               </div>
               <div className="flex items-center gap-1.5">
                 <svg className="w-4 h-4 text-primary-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -62,7 +62,7 @@ export function Hero() {
                   AI
                 </div>
                 <div>
-                  <div className="text-white font-medium text-sm">Simple AI Bot</div>
+                  <div className="text-white font-medium text-sm">Simple AI Agente</div>
                   <div className="text-primary-400 text-xs">En línea</div>
                 </div>
               </div>

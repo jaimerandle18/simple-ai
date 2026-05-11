@@ -12,7 +12,7 @@ export function Footer() {
               <Image src="/assets/simpleLogo1.png" alt="Simple AI" width={140} height={36} className="h-8 w-auto" />
             </div>
             <p className="text-sm max-w-sm">
-              Automatiza tus conversaciones de WhatsApp con inteligencia artificial.
+              Agentes de comunicación y ventas con inteligencia artificial para WhatsApp, Instagram, Facebook y más.
               Más ventas, menos esfuerzo.
             </p>
           </div>
