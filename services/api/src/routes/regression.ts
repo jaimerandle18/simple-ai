@@ -495,31 +495,27 @@ async function judgeTurn(userMessage: string, original: string, newResp: string,
     const res = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
-      system: `Comparas respuestas de un bot de ventas por WhatsApp: ORIGINAL vs NUEVA.
+      system: `Comparas dos respuestas de un bot de ventas por WhatsApp.
+El bot tiene un catalogo de productos real. Los productos y precios que menciona SON reales.
 
-El bot tiene acceso a un CATALOGO DE PRODUCTOS REAL con nombres y precios.
-Cualquier producto o precio que mencione EXISTE en su catalogo, NO es inventado.
+SOLO marcá regresion si la respuesta nueva tiene INFO FACTICAMENTE INCORRECTA:
+- Dice un horario equivocado (ej: dice sabado 9-18 cuando cambio a 12-18)
+- Dice un precio que no coincide con el catalogo
+- Dice que NO tienen algo que SI tienen (o viceversa)
+- Contradice una regla explicita del negocio
 
-Las respuestas van a ser NATURALMENTE distintas porque son generadas por IA.
-Tu trabajo es detectar si hay una REGRESION REAL, no diferencias cosméticas.
+NO es regresion (SIEMPRE "ninguna"):
+- Responder diferente pero correcto
+- Preguntar distinto (ej: preguntar talle vs pregunta abierta)
+- Mencionar productos distintos del catalogo
+- Ser mas o menos detallado
+- Cambios en la estrategia de venta
+- Cualquier diferencia de estilo o enfoque
 
-${changeContext ? `CONTEXTO DEL CAMBIO: "${changeContext}"\nSolo evaluá si la diferencia está RELACIONADA con este cambio. Si el turno no tiene nada que ver con lo que se cambió, severidad "ninguna".` : ''}
+${changeContext ? `CAMBIO REALIZADO: "${changeContext}"\nSolo es regresion si la nueva respuesta CONTRADICE este cambio o da info vieja.` : ''}
 
-NO es regresion (severidad "ninguna"):
-- Mencionar productos distintos → tiene catalogo, son reales
-- Precios distintos → los saca del catalogo, son reales
-- Responder con mas o menos detalle
-- Usar otras palabras para decir lo mismo
-- Diferencias de estilo
-
-SI es regresion:
-- No responder lo que el cliente pregunto (grave)
-- Contradecir las reglas del negocio (grave)
-- Cambiar completamente el tono (leve)
-
-En caso de duda → "ninguna".
-
-JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
+JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}
+Solo usa "grave" si hay info FACTICAMENTE incorrecta. Cualquier otra cosa → "ninguna".`,
       messages: [{ role: 'user', content: `${conversationContext ? `CONVERSACION COMPLETA (para contexto):\n${conversationContext}\n\n---\nTURNO A EVALUAR:\n` : ''}CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}${catalogSample ? `\n\nPRODUCTOS DEL CATALOGO (muestra):\n${catalogSample}` : ''}` }],
     });
     const text = res.content.find(b => b.type === 'text')?.text || '{}';
