@@ -150,7 +150,7 @@ export default function ScraperPage() {
         </a>
       </div>
 
-      <div className="max-w-3xl space-y-6">
+      <div className="space-y-6">
         {/* Scraper */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           <h2 className="text-base font-semibold text-gray-900 mb-2">Escanear tu web</h2>

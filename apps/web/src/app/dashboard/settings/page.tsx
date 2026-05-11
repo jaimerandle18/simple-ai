@@ -115,7 +115,7 @@ export default function SettingsPage() {
         <p className="text-gray-500 text-sm mt-1">Ajustes de tu cuenta y negocio</p>
       </div>
 
-      <div className="max-w-3xl space-y-6">
+      <div className="space-y-6">
 
         {/* Perfil */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">

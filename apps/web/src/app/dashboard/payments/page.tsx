@@ -59,7 +59,7 @@ export default function PaymentsPage() {
         <p className="text-gray-500 text-sm mt-1">Gestioná tu plan y el historial de pagos</p>
       </div>
 
-      <div className="max-w-4xl space-y-8">
+      <div className="space-y-8">
 
         {/* Estado actual */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
