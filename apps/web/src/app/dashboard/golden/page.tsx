@@ -89,7 +89,7 @@ export default function GoldenPage() {
             {goldens.map(g => (
               <div key={g.goldenId} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
                 <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
+                  <a href={`/dashboard/conversations?id=${g.conversationId}`} className="flex-1 min-w-0 hover:opacity-80 transition">
                     <div className="flex items-center gap-2">
                       {g.lastVerdict && (
                         <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${verdictDot(g.lastVerdict)}`} title={`Ultima verificacion: ${g.lastVerdict}`} />
@@ -110,7 +110,7 @@ export default function GoldenPage() {
                         </span>
                       )}
                     </div>
-                  </div>
+                  </a>
                   <button
                     onClick={() => handleArchive(g.goldenId)}
                     className="text-xs text-gray-400 hover:text-red-500 ml-3 flex-shrink-0 p-1"

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
 import { RegressionModal } from '@/components/dashboard/RegressionModal';
@@ -44,8 +45,9 @@ export default function ConversationsPage() {
   const { auth } = useAuth();
   const tenantId = auth?.tenantId;
 
+  const searchParams = useSearchParams();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('id'));
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
