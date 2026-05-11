@@ -282,15 +282,18 @@ async function executeRegression(tenantId: string, runId: string) {
     const golden = goldenMap.get(goldenIds[i]);
     if (!golden) continue;
 
-    await putItem({
-      ...run,
-      status: 'running',
-      progress: { current: i, total: goldenIds.length },
-      currentGolden: { goldenId: golden.goldenId, preview: golden.preview || '', tags: golden.tags || [] },
-    });
+    const turnCount = Math.min((golden.turns || []).length, 50);
+    const onProgress = async (turnIdx: number) => {
+      await putItem({
+        ...run, status: 'running',
+        progress: { current: i, total: goldenIds.length },
+        currentGolden: { goldenId: golden.goldenId, preview: `${(golden.preview || '').slice(0, 40)} (${turnIdx + 1}/${turnCount})`, tags: golden.tags || [] },
+      });
+    };
+    await onProgress(0);
 
     try {
-      const result = await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories);
+      const result = await replayAndJudge(golden, stableBlock, tenantBlock, catalog, categories, onProgress);
       results.push(result);
     } catch (err: any) {
       results.push({
@@ -331,16 +334,18 @@ async function executeRegression(tenantId: string, runId: string) {
 
 async function replayAndJudge(
   golden: any, stableBlock: string, tenantBlock: string, catalog: any[], categories: string,
+  onProgress?: (turnIdx: number) => Promise<void>,
 ): Promise<any> {
   const turns = golden.turns || [];
   const turnResults: any[] = [];
   let worstSeverity = 'ninguna';
   const severityOrder: Record<string, number> = { ninguna: 0, leve: 1, grave: 2 };
 
-  // Máximo 5 turnos por golden para no tardar una eternidad
-  const maxTurns = Math.min(turns.length, 5);
-  for (let i = 0; i < maxTurns; i++) {
+  // Replay todos los turnos, recolectar respuestas nuevas
+  const newResponses: string[] = [];
+  for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
+    if (onProgress) await onProgress(i);
 
     // Historial con turnos ORIGINALES anteriores
     const history: Anthropic.MessageParam[] = [];
@@ -402,19 +407,31 @@ async function replayAndJudge(
       newResponse = '(error: ' + err.message + ')';
     }
 
-    const judgement = await judgeTurn(turn.userMessage, turn.botResponse, newResponse);
-    const severity = judgement.severidad_regresion || 'ninguna';
-    if ((severityOrder[severity] || 0) > (severityOrder[worstSeverity] || 0)) {
-      worstSeverity = severity;
-    }
+    newResponses.push(newResponse);
+  }
 
-    turnResults.push({
-      turnNumber: turn.turnNumber,
-      userMessage: turn.userMessage,
-      originalResponse: turn.botResponse,
-      newResponse,
-      judgement,
-    });
+  // Juzgar todos los turnos en paralelo (batches de 5)
+  for (let batch = 0; batch < newResponses.length; batch += 5) {
+    const batchPromises = [];
+    for (let j = batch; j < Math.min(batch + 5, newResponses.length); j++) {
+      batchPromises.push(judgeTurn(turns[j].userMessage, turns[j].botResponse, newResponses[j]));
+    }
+    const batchResults = await Promise.all(batchPromises);
+    for (let j = 0; j < batchResults.length; j++) {
+      const idx = batch + j;
+      const judgement = batchResults[j];
+      const severity = judgement.severidad_regresion || 'ninguna';
+      if ((severityOrder[severity] || 0) > (severityOrder[worstSeverity] || 0)) {
+        worstSeverity = severity;
+      }
+      turnResults.push({
+        turnNumber: turns[idx].turnNumber,
+        userMessage: turns[idx].userMessage,
+        originalResponse: turns[idx].botResponse,
+        newResponse: newResponses[idx],
+        judgement,
+      });
+    }
   }
 
   const overallVerdict = worstSeverity === 'grave' ? 'failed'
