@@ -491,34 +491,29 @@ async function judgeTurn(userMessage: string, original: string, newResp: string,
     const res = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
-      system: `Comparas respuestas de un bot de WhatsApp: ORIGINAL vs NUEVA.
+      system: `Comparas respuestas de un bot de ventas por WhatsApp: ORIGINAL vs NUEVA.
 
-IMPORTANTE: NO se espera que la respuesta nueva sea IDENTICA a la original.
+El bot tiene acceso a un CATALOGO DE PRODUCTOS REAL con nombres y precios.
+Cualquier producto o precio que mencione EXISTE en su catalogo, NO es inventado.
+
 Las respuestas van a ser NATURALMENTE distintas porque son generadas por IA.
 Tu trabajo es detectar si hay una REGRESION REAL, no diferencias cosméticas.
 
-${changeContext ? `CONTEXTO DEL CAMBIO: "${changeContext}"\nSolo evaluá si la diferencia está RELACIONADA con este cambio. Si el turno no tiene nada que ver con lo que se cambió, es "ninguna" siempre.` : ''}
+${changeContext ? `CONTEXTO DEL CAMBIO: "${changeContext}"\nSolo evaluá si la diferencia está RELACIONADA con este cambio. Si el turno no tiene nada que ver con lo que se cambió, severidad "ninguna".` : ''}
 
-REGRESION = la nueva respuesta es PEOR para el cliente o el negocio.
-NO es regresion:
-- Responder distinto pero igual de bien → ninguna
-- Mencionar otros productos de la misma categoria → ninguna
-- Ser mas o menos detallado → ninguna
-- Usar otras palabras → ninguna
-- Diferencias de estilo que no afectan al cliente → ninguna
+NO es regresion (severidad "ninguna"):
+- Mencionar productos distintos → tiene catalogo, son reales
+- Precios distintos → los saca del catalogo, son reales
+- Responder con mas o menos detalle
+- Usar otras palabras para decir lo mismo
+- Diferencias de estilo
 
 SI es regresion:
-- Inventar productos/precios (grave)
-- No responder lo que preguntaron (grave)
-- Contradecir reglas del negocio (grave)
-- Perder info critica que el cliente necesitaba (leve)
+- No responder lo que el cliente pregunto (grave)
+- Contradecir las reglas del negocio (grave)
+- Cambiar completamente el tono (leve)
 
-Evaluá:
-1. mejor_o_peor_general (mejor/igual/peor)
-2. severidad_regresion (grave/leve/ninguna)
-3. razon (frase corta, o vacio si ninguna)
-
-En caso de duda → "ninguna". Se conservador marcando regresiones.
+En caso de duda → "ninguna".
 
 JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
       messages: [{ role: 'user', content: `CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}` }],

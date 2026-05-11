@@ -5,23 +5,12 @@ import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
 import { RegressionModal } from './RegressionModal';
 
-/**
- * Pill flotante global que muestra el estado de regression runs.
- * Vive en el layout del dashboard → visible en todas las páginas.
- * Draggable: se puede mover a cualquier esquina.
- */
 export function RegressionPill() {
   const { auth } = useAuth();
   const tenantId = auth?.tenantId;
   const [runId, setRunId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  // Drag state
-  const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = default (bottom-right)
-  const dragging = useRef(false);
-  const dragOffset = useRef({ x: 0, y: 0 });
-
-  // Escuchar evento custom para iniciar regression
   useEffect(() => {
     const onStart = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -31,14 +20,11 @@ export function RegressionPill() {
     return () => window.removeEventListener('regression-started', onStart);
   }, []);
 
-  // Chequear runs pendientes al montar
   useEffect(() => {
     if (!tenantId) return;
     api('/regression/pending', { tenantId })
       .then(data => {
-        if (data.run?.runId && !data.run.decision) {
-          setRunId(data.run.runId);
-        }
+        if (data.run?.runId && !data.run.decision) setRunId(data.run.runId);
       })
       .catch(() => {});
   }, [tenantId]);
@@ -46,34 +32,7 @@ export function RegressionPill() {
   const handleDone = useCallback((decision: 'apply' | 'revert') => {
     setRunId(null);
     setExpanded(false);
-    if (decision === 'apply') {
-      window.dispatchEvent(new Event('config-changed'));
-    }
-  }, []);
-
-  // Drag handlers
-  const onMouseDown = (e: React.MouseEvent) => {
-    dragging.current = true;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    e.preventDefault();
-  };
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      setPos({
-        x: e.clientX - dragOffset.current.x,
-        y: e.clientY - dragOffset.current.y,
-      });
-    };
-    const onMouseUp = () => { dragging.current = false; };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
+    if (decision === 'apply') window.dispatchEvent(new Event('config-changed'));
   }, []);
 
   if (!runId) return null;
@@ -82,22 +41,13 @@ export function RegressionPill() {
     return <RegressionModal runId={runId} onDone={handleDone} />;
   }
 
-  const style = pos.x >= 0
-    ? { left: pos.x, top: pos.y, right: 'auto' as const, bottom: 'auto' as const }
-    : { right: 20, bottom: 20 };
-
   return (
-    <div
-      className="fixed z-[90] cursor-grab active:cursor-grabbing select-none"
-      style={style}
-      onMouseDown={onMouseDown}
-    >
+    <div className="fixed bottom-5 right-5 z-[90]">
       <PillContent runId={runId} tenantId={tenantId!} onExpand={() => setExpanded(true)} />
     </div>
   );
 }
 
-/** Contenido del pill — pollea status */
 function PillContent({ runId, tenantId, onExpand }: { runId: string; tenantId: string; onExpand: () => void }) {
   const [status, setStatus] = useState<string>('queued');
   const [progress, setProgress] = useState({ current: 0, total: 1 });
@@ -128,7 +78,7 @@ function PillContent({ runId, tenantId, onExpand }: { runId: string; tenantId: s
 
   return (
     <button
-      onClick={(e) => { e.stopPropagation(); onExpand(); }}
+      onClick={onExpand}
       className={`flex items-center gap-3 px-5 py-3 rounded-2xl shadow-xl text-sm font-medium transition-all hover:scale-105 ${
         status === 'running' || status === 'queued'
           ? 'bg-white border-2 border-gray-200 text-gray-700'
