@@ -1,5 +1,6 @@
 import NextAuth from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
+import CredentialsProvider from 'next-auth/providers/credentials';
 
 const handler = NextAuth({
   providers: [
@@ -7,14 +8,44 @@ const handler = NextAuth({
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
     }),
+    CredentialsProvider({
+      name: 'credentials',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Contraseña', type: 'password' },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+
+        const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL;
+        const res = await fetch(`${apiUrl}/auth/credentials`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+        });
+
+        if (!res.ok) return null;
+
+        const data = await res.json();
+        return {
+          id: data.user.userId,
+          email: data.user.email,
+          name: data.user.name,
+          tenantId: data.user.tenantId,
+          userId: data.user.userId,
+          role: data.user.role,
+        };
+      },
+    }),
   ],
   pages: {
     signIn: '/login',
   },
   callbacks: {
     async signIn({ user, account }) {
+      if (account?.provider === 'credentials') return true;
+
       try {
-        // Sync user with backend — creates tenant if new
         const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL;
         console.log('Auth callback - calling backend:', apiUrl);
         const res = await fetch(`${apiUrl}/auth/login`, {
@@ -34,7 +65,6 @@ const handler = NextAuth({
         }
 
         const data = await res.json();
-        // Store tenantId and userId on the user object for the JWT callback
         (user as any).tenantId = data.user.tenantId;
         (user as any).userId = data.user.userId;
         (user as any).role = data.user.role;

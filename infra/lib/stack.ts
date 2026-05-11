@@ -89,11 +89,11 @@ export class SimpleAiStack extends cdk.Stack {
       'curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose',
       'chmod +x /usr/local/lib/docker/cli-plugins/docker-compose',
       'mkdir -p /opt/waha',
-      `docker login -u devlikeapro -p ${process.env.DOCKER_HUB_TOKEN || ''}`,
+      // Retrieve Docker Hub token from SSM and login (credentials persist for future restarts)
+      'DOCKER_HUB_TOKEN=$(aws ssm get-parameter --name /simple-ai/docker-hub-token --with-decryption --query Parameter.Value --output text --region sa-east-1)',
+      'echo "$DOCKER_HUB_TOKEN" | docker login -u devlikeapro --password-stdin',
       'docker pull devlikeapro/waha-plus:latest',
-      'docker logout',
       `cat > /opt/waha/docker-compose.yml << 'COMPOSE'
-version: '3'
 services:
   waha:
     image: devlikeapro/waha-plus:latest
@@ -106,6 +106,17 @@ COMPOSE`,
       'cd /opt/waha && docker compose up -d'
     );
 
+    const instanceRole = new iam.Role(this, 'EvolutionInstanceRole', {
+      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+      ],
+    });
+    instanceRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/simple-ai/docker-hub-token`],
+    }));
+
     const evolutionInstance = new ec2.Instance(this, 'WahaInstance', {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
@@ -113,13 +124,7 @@ COMPOSE`,
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
       securityGroup: evolutionSg,
       userData,
-      userDataCausesReplacement: true,
-      role: new iam.Role(this, 'EvolutionInstanceRole', {
-        assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-        managedPolicies: [
-          iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
-        ],
-      }),
+      role: instanceRole,
     });
 
     const eip = new ec2.CfnEIP(this, 'EvolutionEIP', { domain: 'vpc' });

@@ -2,29 +2,44 @@
 
 import { signIn } from 'next-auth/react';
 import Image from 'next/image';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleCredentialsLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    const result = await signIn('credentials', { email, password, redirect: false });
+    setLoading(false);
+    if (result?.error) {
+      setError('Email o contraseña incorrectos');
+    } else {
+      router.push('/dashboard');
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      {/* Background gradient */}
       <div className="absolute inset-0 bg-gradient-to-br from-primary-900/20 via-gray-950 to-secondary-900/20" />
 
       <div className="relative w-full max-w-md">
-        {/* Logo */}
         <div className="flex justify-center mb-10">
           <Image src="/assets/simpleLogo1.png" alt="Simple AI" width={200} height={50} className="h-12 w-auto" />
         </div>
 
-        {/* Card */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
-          <h1 className="text-2xl font-bold text-white text-center mb-2">
-            Bienvenido
-          </h1>
+          <h1 className="text-2xl font-bold text-white text-center mb-2">Bienvenido</h1>
           <p className="text-gray-400 text-center text-sm mb-8">
             Ingresá a tu cuenta para gestionar tus conversaciones
           </p>
 
-          {/* Google Button */}
           <button
             onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
             className="w-full flex items-center justify-center gap-3 bg-white text-gray-900 font-medium py-3 px-4 rounded-lg hover:bg-gray-100 transition-colors"
@@ -38,28 +53,46 @@ export default function LoginPage() {
             Continuar con Google
           </button>
 
-          {/* Divider */}
           <div className="flex items-center gap-3 my-6">
             <div className="flex-1 h-px bg-gray-800" />
             <span className="text-gray-500 text-xs">o</span>
             <div className="flex-1 h-px bg-gray-800" />
           </div>
 
-          {/* Email magic link (placeholder) */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Email</label>
-            <input
-              type="email"
-              placeholder="tu@email.com"
-              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
-            />
-            <button className="w-full mt-3 bg-gradient-to-r from-primary-600 to-secondary-600 text-white font-medium py-3 px-4 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all">
-              Enviar link de acceso
+          <form onSubmit={handleCredentialsLogin} className="space-y-3">
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="tu@email.com"
+                required
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Contraseña</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-colors"
+              />
+            </div>
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-primary-600 to-secondary-600 text-white font-medium py-3 px-4 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all disabled:opacity-50"
+            >
+              {loading ? 'Ingresando...' : 'Ingresar'}
             </button>
-          </div>
+          </form>
         </div>
 
-        {/* Footer */}
         <p className="text-center text-gray-500 text-xs mt-6">
           Al continuar, aceptás nuestros{' '}
           <a href="/terms" className="text-primary-400 hover:text-primary-300">términos y condiciones</a>

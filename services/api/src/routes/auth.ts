@@ -1,7 +1,11 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { keys, getItem, putItem, queryByGSI } from '../lib/dynamo';
 import { json, error } from '../lib/response';
+
+function hashPassword(password: string): string {
+  return createHash('sha256').update(password).digest('hex');
+}
 
 export async function handleAuth(event: APIGatewayProxyEventV2) {
   const path = event.requestContext.http.path;
@@ -92,6 +96,22 @@ export async function handleAuth(event: APIGatewayProxyEventV2) {
     ]);
 
     return json({ user, tenant, isNew: true }, 201);
+  }
+
+  // POST /auth/credentials — login con email + password
+  if (method === 'POST' && path === '/auth/credentials') {
+    const body = JSON.parse(event.body || '{}');
+    const { email, password } = body;
+
+    if (!email || !password) return error('Email y contraseña requeridos', 400);
+
+    const existing = await queryByGSI('byEmail', 'email', email);
+    const user = existing.find((r: any) => (r.SK as string).startsWith('USER#'));
+    if (!user || !user.passwordHash) return error('Credenciales inválidas', 401);
+    if (user.passwordHash !== hashPassword(password)) return error('Credenciales inválidas', 401);
+
+    const tenantData = await getItem(keys.tenant(user.tenantId as string));
+    return json({ user, tenant: tenantData, isNew: false });
   }
 
   return error('Not found', 404);
