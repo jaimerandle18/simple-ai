@@ -16,6 +16,7 @@ export const keys = {
   message: (convId: string, timestamp: string, messageId: string) => ({ PK: `CONV#${convId}`, SK: `MSG#${timestamp}#${messageId}` }),
   contact: (tenantId: string, phone: string) => ({ PK: `TENANT#${tenantId}`, SK: `CONTACT#${phone}` }),
   agent: (tenantId: string, agentType: string) => ({ PK: `TENANT#${tenantId}`, SK: `AGENT#${agentType}` }),
+  contactMemory: (tenantId: string, phone: string) => ({ PK: `TENANT#${tenantId}`, SK: `MEMORY#${phone}` }),
 };
 
 export async function getItem(key: { PK: string; SK: string }) {

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
+import { RegressionModal } from '@/components/dashboard/RegressionModal';
 
 interface FeedbackTarget {
   messageId: string;
@@ -69,6 +70,15 @@ export default function ConversationsPage() {
       .then(setConversations)
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // Chequear si hay un run pendiente de decision
+    api('/regression/pending', { tenantId })
+      .then(data => {
+        if (data.run?.runId && !data.run.decision) {
+          setRegressionRunId(data.run.runId);
+        }
+      })
+      .catch(() => {});
   }, [tenantId]);
 
   useEffect(() => {
@@ -135,24 +145,46 @@ export default function ConversationsPage() {
     }
   };
 
+  const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
+
   const confirmFeedback = async () => {
     if (!feedbackPreview || !tenantId) return;
     setFeedbackStep('loading');
     try {
-      const result = await api('/agents/feedback/confirm', {
-        method: 'POST',
-        tenantId,
-        body: { proposedRules: feedbackPreview.proposedRules },
+      // Lanzar regression en vez de guardar directo
+      const agent = await api('/agents/main', { tenantId });
+      const oldPrompt = agent?.agentConfig?.extraInstructions || '';
+
+      const regResult = await api('/regression/start', {
+        method: 'POST', tenantId,
+        body: { oldPrompt, newPrompt: feedbackPreview.proposedRules },
       });
-      console.log('[feedback confirm]', result);
-      setFeedbackStep('done');
-      setShowVerifyPrompt(true);
-      window.dispatchEvent(new Event('config-changed'));
-      setTimeout(closeFeedback, 1800);
+
+      if (regResult.skipped) {
+        // Sin goldens o cambio chico: guardar directo como antes
+        await api('/agents/feedback/confirm', {
+          method: 'POST', tenantId,
+          body: { proposedRules: feedbackPreview.proposedRules },
+        });
+        setFeedbackStep('done');
+        window.dispatchEvent(new Event('config-changed'));
+        setTimeout(closeFeedback, 1800);
+      } else {
+        // Tiene goldens: mostrar modal bloqueante
+        closeFeedback();
+        setRegressionRunId(regResult.runId);
+      }
     } catch (err) {
       console.error(err);
       setFeedbackStep('preview');
-      setFeedbackError('No se pudo guardar. Intentá de nuevo.');
+      setFeedbackError('No se pudo iniciar la verificacion. Intenta de nuevo.');
+    }
+  };
+
+  const handleRegressionDone = (decision: 'apply' | 'revert') => {
+    setRegressionRunId(null);
+    if (decision === 'apply') {
+      window.dispatchEvent(new Event('config-changed'));
     }
   };
 
@@ -666,6 +698,11 @@ export default function ConversationsPage() {
           </>
         )}
       </div>
+
+      {/* Modal bloqueante de regression testing */}
+      {regressionRunId && (
+        <RegressionModal runId={regressionRunId} onDone={handleRegressionDone} />
+      )}
     </div>
   );
 }

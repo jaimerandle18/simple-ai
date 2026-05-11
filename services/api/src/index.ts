@@ -11,6 +11,7 @@ import { handleMetrics } from './routes/metrics';
 import { handleChannels } from './routes/channels';
 import { handleOnboarding } from './routes/onboarding';
 import { handleGolden } from './routes/golden';
+import { handleRegression } from './routes/regression';
 
 export const handler = async (
   event: APIGatewayProxyEventV2
@@ -34,6 +35,7 @@ export const handler = async (
     if (path.startsWith('/metrics')) return handleMetrics(event);
     if (path.startsWith('/onboarding')) return handleOnboarding(event);
     if (path.startsWith('/golden')) return handleGolden(event);
+    if (path.startsWith('/regression')) return handleRegression(event);
     if (path.startsWith('/files')) return handleFiles(event);
     if (path.startsWith('/test')) return handleTest(event);
 

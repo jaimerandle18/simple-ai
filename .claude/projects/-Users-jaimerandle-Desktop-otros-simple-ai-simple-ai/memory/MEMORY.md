@@ -1,0 +1,5 @@
+- [Jaime - perfil](user_profile.md) — Emprendedor argentino construyendo SaaS de bots conversacionales
+- [Plan del proyecto](project_saas_plan.md) — Stack, sprints, arquitectura del SaaS multi-tenant WhatsApp
+- [Referencia visual](reference_wespeak.md) — wespeak.pro como referencia de diseño para el nuevo frontend
+- [No preguntar](feedback_no_preguntar.md) — Ejecutar sin pedir confirmación ni permisos
+- [Progreso del proyecto](project_progress.md) — Estado actual, qué funciona, qué falta, credenciales y notas técnicas
