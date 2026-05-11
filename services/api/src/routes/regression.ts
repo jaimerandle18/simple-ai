@@ -329,14 +329,32 @@ async function judgeTurn(userMessage: string, original: string, newResp: string)
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
       system: `Comparas respuestas de un bot de WhatsApp: ORIGINAL vs NUEVA.
+
+IMPORTANTE: NO se espera que la respuesta nueva sea IDENTICA a la original.
+Lo que importa es que la INTENCION sea la misma y la CALIDAD sea similar o mejor.
+
+Ejemplos de cosas que estan BIEN (no son regresion):
+- Mencionar productos distintos pero de la misma categoria → OK
+- Usar palabras diferentes para decir lo mismo → OK
+- Dar mas o menos detalle → OK
+- Cambiar el orden de la info → OK
+- Nombrar precios levemente distintos si son del catalogo → OK
+
+Ejemplos de REGRESION REAL (grave):
+- Inventar productos que no existen
+- Mandar al cliente a la web cuando no deberia
+- No responder lo que el cliente pregunta
+- Cambiar completamente el tono (de casual a formal o viceversa)
+- Dar info contradictoria con las reglas del negocio
+
 Evaluá la NUEVA:
 1. tono_consistente (si/no)
-2. productos_clave (si/no/parcial/na)
+2. productos_clave (si/parcial/na) — "si" si responde sobre el mismo TIPO de producto
 3. formato_precio (si/no/na)
 4. intencion_venta (mejor/igual/peor)
 5. respeta_reglas (si/no)
 6. mejor_o_peor_general (mejor/igual/peor)
-Severidad: grave (inventa/rompe), leve (estilo distinto), ninguna (ok)
+Severidad: grave (inventa/rompe reglas), leve (pierde info importante), ninguna (ok o mejor)
 JSON: {"tono_consistente":"si","productos_clave":"na","formato_precio":"na","intencion_venta":"igual","respeta_reglas":"si","mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
       messages: [{ role: 'user', content: `CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}` }],
     });

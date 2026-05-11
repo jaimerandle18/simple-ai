@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
+import { RegressionModal } from '@/components/dashboard/RegressionModal';
 import Link from 'next/link';
 
 interface Message {
@@ -25,6 +26,7 @@ export default function OnboardingPage() {
   const [promptLoading, setPromptLoading] = useState(false);
   const [testResults, setTestResults] = useState<Array<{ input: string; output: string }> | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const allSections = ['business', 'bot_persona', 'horarios', 'pago', 'envio', 'politicas', 'promos', 'escalamiento'];
@@ -57,6 +59,13 @@ export default function OnboardingPage() {
     setLoading(true);
 
     try {
+      // Guardar prompt viejo ANTES del cambio
+      let oldPrompt = '';
+      try {
+        const agentBefore = await api('/agents/main', { tenantId: tenantId! });
+        oldPrompt = agentBefore?.agentConfig?.extraInstructions || '';
+      } catch {}
+
       const res = await api('/onboarding/chat', {
         method: 'POST',
         tenantId,
@@ -69,8 +78,22 @@ export default function OnboardingPage() {
       setMessages(prev => [...prev, { role: 'assistant', content: res.reply }]);
       if (res.document) setDocument(res.document);
       if (res.completedSections) setCompletedSections(res.completedSections);
-      // Avisar al banner que hubo cambios
       window.dispatchEvent(new Event('config-changed'));
+
+      // Si hay goldens, lanzar regression con el prompt nuevo
+      try {
+        const agentAfter = await api('/agents/main', { tenantId: tenantId! });
+        const newPrompt = agentAfter?.agentConfig?.extraInstructions || '';
+        if (oldPrompt !== newPrompt) {
+          const regResult = await api('/regression/start', {
+            method: 'POST', tenantId: tenantId!,
+            body: { oldPrompt, newPrompt },
+          });
+          if (!regResult.skipped && regResult.runId) {
+            setRegressionRunId(regResult.runId);
+          }
+        }
+      } catch { /* sin goldens o error, no bloquear */ }
     } catch (err: any) {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + err.message }]);
     }
@@ -299,6 +322,18 @@ export default function OnboardingPage() {
           )}
         </div>
       </div>
+
+      {regressionRunId && (
+        <RegressionModal
+          runId={regressionRunId}
+          onDone={(decision) => {
+            setRegressionRunId(null);
+            if (decision === 'apply') {
+              window.dispatchEvent(new Event('config-changed'));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
