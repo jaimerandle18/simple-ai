@@ -448,11 +448,15 @@ async function replayAndJudge(
     newResponses.push(newResponse);
   }
 
+  // Contexto para el juez: conversación entera + muestra del catálogo
+  const convContext = allTurns.map((t: any) => `Cliente: ${t.userMessage}\nBot: ${t.botResponse}`).join('\n\n');
+  const catSample = catalog.slice(0, 15).map((p: any) => `${p.name} - ${p.price || 'sin precio'}`).join('\n');
+
   // Juzgar todos los turnos en paralelo (batches de 5)
   for (let batch = 0; batch < newResponses.length; batch += 5) {
     const batchPromises = [];
     for (let j = batch; j < Math.min(batch + 5, newResponses.length); j++) {
-      batchPromises.push(judgeTurn(turns[j].userMessage, turns[j].botResponse, newResponses[j], changeContext));
+      batchPromises.push(judgeTurn(turns[j].userMessage, turns[j].botResponse, newResponses[j], changeContext, convContext, catSample));
     }
     const batchResults = await Promise.all(batchPromises);
     for (let j = 0; j < batchResults.length; j++) {
@@ -484,7 +488,7 @@ async function replayAndJudge(
   };
 }
 
-async function judgeTurn(userMessage: string, original: string, newResp: string, changeContext?: string): Promise<any> {
+async function judgeTurn(userMessage: string, original: string, newResp: string, changeContext?: string, conversationContext?: string, catalogSample?: string): Promise<any> {
   const fallback = { mejor_o_peor_general: 'igual', severidad_regresion: 'ninguna', razon: '' };
 
   try {
@@ -516,7 +520,7 @@ SI es regresion:
 En caso de duda → "ninguna".
 
 JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}`,
-      messages: [{ role: 'user', content: `CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}` }],
+      messages: [{ role: 'user', content: `${conversationContext ? `CONVERSACION COMPLETA (para contexto):\n${conversationContext}\n\n---\nTURNO A EVALUAR:\n` : ''}CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}${catalogSample ? `\n\nPRODUCTOS DEL CATALOGO (muestra):\n${catalogSample}` : ''}` }],
     });
     const text = res.content.find(b => b.type === 'text')?.text || '{}';
     return { ...fallback, ...JSON.parse(text.replace(/```json|```/g, '').trim()) };
