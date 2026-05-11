@@ -58,7 +58,7 @@ export default function GoldenPage() {
   }
 
   return (
-    <div className="p-4 md:p-8 max-w-3xl">
+    <div className="p-4 md:p-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Conversaciones tipo</h1>
         <p className="text-gray-500 text-sm mt-1">
@@ -85,7 +85,7 @@ export default function GoldenPage() {
           <p className="text-xs text-gray-400 mb-4">
             {goldens.length} conversacion{goldens.length === 1 ? '' : 'es'} guardada{goldens.length === 1 ? '' : 's'}
           </p>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {goldens.map(g => (
               <div key={g.goldenId} className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
                 <div className="flex items-start justify-between">
