@@ -384,11 +384,12 @@ async function replayAndJudge(
     const turn = turns[i];
     if (onProgress) await onProgress(i);
 
-    // Historial con turnos ORIGINALES anteriores
+    // Historial: TODOS los turnos originales que vinieron ANTES de este turno
     const history: Anthropic.MessageParam[] = [];
-    for (let j = 0; j < i; j++) {
-      history.push({ role: 'user', content: turns[j].userMessage });
-      history.push({ role: 'assistant', content: turns[j].botResponse });
+    for (const prev of allTurns) {
+      if (prev.turnNumber >= turn.turnNumber) break;
+      history.push({ role: 'user', content: prev.userMessage });
+      history.push({ role: 'assistant', content: prev.botResponse });
     }
 
     // Buscar productos relevantes para este turno (mismo que hace el bot real)
