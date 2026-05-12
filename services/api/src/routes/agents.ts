@@ -1,7 +1,7 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
-import { crawlWebsite, scrapePage } from '../lib/search';
+import { crawlWebsite, scrapePage, mapSite } from '../lib/search';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
@@ -263,14 +263,14 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
 
   const agentMatch = path.match(/^\/agents\/([^/]+)$/);
 
-  // GET /agents/:type
-  if (method === 'GET' && agentMatch) {
+  // GET /agents/:type (exclude specific named paths handled below)
+  if (method === 'GET' && agentMatch && path !== '/agents/products' && path !== '/agents/scrape/schedule') {
     const agent = await getItem(keys.agent(tenantId, agentMatch[1]));
     return json(agent || { agentConfig: {} });
   }
 
   // PUT /agents/:type — merge, no pisar businessConfig/onboardingHistory
-  if (method === 'PUT' && agentMatch) {
+  if (method === 'PUT' && agentMatch && path !== '/agents/scrape/schedule') {
     const body = JSON.parse(event.body || '{}');
     const existing = await getItem(keys.agent(tenantId, agentMatch[1])) || {};
     const agent = {
@@ -585,27 +585,83 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
     if (!url) return error('url is required');
 
     try {
-      // PASO 1: Scrapear la página principal para entender la estructura
-      const mainPage = await scrapePage(url);
+      // PASO 1: Scrapear la página principal y mapear todo el sitio en paralelo
+      const [mainPage, siteUrls] = await Promise.all([
+        scrapePage(url),
+        mapSite(url, 500),
+      ]);
       if (!mainPage) return error('No se pudo acceder a la web.', 400);
 
-      // PASO 2: Opus analiza la web y encuentra las URLs de categorías/productos
+      console.log(`[SCRAPE] Site map returned ${siteUrls.length} URLs`);
+
+      // Filtrar URLs de ruido del mapa del sitio
+      const baseHostname = new URL(url).hostname;
+      const SKIP = /\/(cart|carrito|checkout|admin|login|wp-admin|wp-json|xmlrpc|account|cuenta|mi-cuenta|registro|register|password|reset|auth|oauth|buscar|search|blog|noticias|contacto|contact|sobre|about|politica|terms|privacy|cookie|sitemap|feed|rss)/i;
+      // Filtrar también páginas de producto individual (/producto/X, /item/X, /p/X)
+      const PRODUCT_PAGE = /\/(producto|product|item|p)\/[^/]+\/?$/i;
+
+      const cleanUrls = siteUrls.filter(u => {
+        try {
+          const parsed = new URL(u);
+          if (parsed.hostname !== baseHostname) return false;
+          const path = parsed.pathname;
+          if (SKIP.test(path)) return false;
+          if (PRODUCT_PAGE.test(path)) return false;
+          // Skip pagination URLs (those we handle ourselves)
+          if (/[?&](page|paged)=\d/.test(u)) return false;
+          return true;
+        } catch { return false; }
+      });
+
+      // Agrupar por primer segmento del path para identificar patrones
+      const pathGroups: Record<string, string[]> = {};
+      for (const u of cleanUrls) {
+        try {
+          const seg = new URL(u).pathname.split('/').filter(Boolean)[0] || '__root__';
+          if (!pathGroups[seg]) pathGroups[seg] = [];
+          pathGroups[seg].push(u);
+        } catch {}
+      }
+      // Segmentos más populares primero (indican secciones grandes = probablemente categorías)
+      const sortedGroups = Object.entries(pathGroups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 20);
+
+      // Construir lista de URLs para Opus: máx 150 URLs representativas
+      const urlsForOpus: string[] = [];
+      for (const [, groupUrls] of sortedGroups) {
+        // Incluir hasta 8 URLs por grupo para que Opus vea el patrón
+        urlsForOpus.push(...groupUrls.slice(0, 8));
+        if (urlsForOpus.length >= 150) break;
+      }
+
+      // PASO 2: Opus selecciona las mejores páginas de listado de productos
+      const discoveryInput = urlsForOpus.length > 0
+        ? `URL base: ${url}\n\nURLS DISPONIBLES EN EL SITIO (${urlsForOpus.length} de ${cleanUrls.length} totales):\n${urlsForOpus.join('\n')}\n\n---\nCONTENIDO DEL HOMEPAGE (primeros 8000 chars):\n${mainPage.content.slice(0, 8000)}`
+        : `URL base: ${url}\n\nContenido:\n${mainPage.content.slice(0, 12000)}`;
+
       const discoveryRes = await anthropic.messages.create({
         model: 'claude-opus-4-7', max_tokens: 2000,
-        system: `Analizas paginas web de tiendas online. Tu trabajo es encontrar TODAS las URLs de categorias o listados de productos.
+        system: `Sos un experto en e-commerce. Tu tarea: identificar TODAS las páginas de LISTADO DE PRODUCTOS de esta tienda.
 
-Busca en el contenido:
-- Links a categorias (ej: /categoria/remeras, /products/hoodies)
-- Links a secciones de la tienda (ej: /tienda, /shop, /productos)
-- Links de navegacion del menu que lleven a productos
-- Links de paginacion (ej: ?page=2)
+REGLAS DE PRIORIDAD (muy importante):
+1. PRIMERO elegí páginas por TIPO DE PRODUCTO / CATEGORÍA (ej: herramientas eléctricas, motosierras, cortacésped, equipos de jardín). Son las que traen MÁS productos variados.
+2. SEGUNDO, como complemento, podés incluir páginas por MARCA (ej: /marcas/husqvarna) SOLO si no hay suficientes páginas de categoría, o si esa marca tiene página de listado rica.
+3. NUNCA incluyas páginas de producto individual.
+4. NUNCA incluyas home, carrito, checkout, login, contacto, blog.
 
-Devolvé JSON: {"categories": [{"url": "URL_COMPLETA", "name": "nombre de la categoria"}], "isProductPage": bool, "hasPagination": bool}
+SEÑALES DE PÁGINA DE CATEGORÍA (preferir):
+- Path con palabras tipo: /categoria/, /productos/, /tienda/, /shop/, /coleccion/, /seccion/, /departamento/, /linea/
+- Varios URLs bajo el mismo prefijo que parecen tipos de producto
 
-Si la pagina YA ES un listado de productos (no hace falta navegar mas), pon isProductPage=true.
-Si es un home o landing, busca los links a las secciones de productos.
-Construi URLs completas (no relativas).`,
-        messages: [{ role: 'user', content: `URL base: ${url}\n\nContenido:\n${mainPage.content.slice(0, 12000)}` }],
+SEÑALES DE PÁGINA DE MARCA (incluir solo como complemento):
+- Path con palabras: /marca/, /marcas/, /brand/, /fabricante/
+
+Si la URL base YA es un listado de productos, pon isProductPage=true.
+
+Devolvé SOLO JSON válido: {"categories": [{"url": "URL_COMPLETA", "name": "nombre", "type": "category|brand"}], "isProductPage": bool}
+Máximo 30 URLs. URLs deben ser completas (https://...).`,
+        messages: [{ role: 'user', content: discoveryInput }],
       });
       const discoveryText = discoveryRes.content[0].type === 'text' ? discoveryRes.content[0].text : '{}';
       let discovery: any;
@@ -615,6 +671,10 @@ Construi URLs completas (no relativas).`,
         discovery = { categories: [], isProductPage: true };
       }
 
+      const categoryPages = (discovery.categories || []).filter((c: any) => c.type !== 'brand');
+      const brandPages = (discovery.categories || []).filter((c: any) => c.type === 'brand');
+      console.log(`[SCRAPE] Discovery: ${categoryPages.length} category pages, ${brandPages.length} brand pages`);
+
       // PASO 3: Armar lista de páginas a scrapear
       const pagesToScrape: { url: string; category: string }[] = [];
 
@@ -622,9 +682,19 @@ Construi URLs completas (no relativas).`,
         pagesToScrape.push({ url, category: '' });
       }
 
-      for (const cat of (discovery.categories || []).slice(0, 20)) {
+      // Agregar páginas de categoría primero (máx 20)
+      for (const cat of categoryPages.slice(0, 20)) {
         if (cat.url && cat.url.startsWith('http')) {
           pagesToScrape.push({ url: cat.url, category: cat.name || '' });
+        }
+      }
+
+      // Si no hay suficientes páginas de categoría, complementar con páginas de marca
+      if (pagesToScrape.length < 5) {
+        for (const cat of brandPages.slice(0, 20)) {
+          if (cat.url && cat.url.startsWith('http')) {
+            pagesToScrape.push({ url: cat.url, category: cat.name || '' });
+          }
         }
       }
 

@@ -418,7 +418,7 @@ export default function ScraperPage() {
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-base font-semibold text-gray-900">Escanear tu web</h2>
-            {(config.websiteScraped || config.productsCount > 0) && (
+            {(config.websiteScraped || config.productsCount > 0 || schedule.configured) && (
               <button
                 onClick={() => setShowCatalog(true)}
                 className="flex items-center gap-1.5 text-sm text-primary-600 font-medium hover:text-primary-700 transition-colors"

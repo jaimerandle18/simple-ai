@@ -104,6 +104,36 @@ export async function scrapeProducts(siteUrl: string): Promise<{ url: string; co
 }
 
 /**
+ * Map a website with Firecrawl: returns all discovered URLs (no content).
+ * Fast and cheap — ideal for discovery before scraping.
+ */
+export async function mapSite(url: string, limit = 500): Promise<string[]> {
+  if (!FIRECRAWL_API_KEY) return [];
+
+  try {
+    const res = await fetch('https://api.firecrawl.dev/v1/map', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${FIRECRAWL_API_KEY}`,
+      },
+      body: JSON.stringify({ url, limit }),
+    });
+    const data: any = await res.json();
+
+    if (!data.success) {
+      console.error('Map failed:', data);
+      return [];
+    }
+
+    return (data.links || []) as string[];
+  } catch (err) {
+    console.error('Map error:', err);
+    return [];
+  }
+}
+
+/**
  * Crawl an entire website with Firecrawl. Returns all pages as markdown.
  * Used as fallback when Google Search is not configured.
  */
