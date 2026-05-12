@@ -4,6 +4,9 @@ import { json, error } from '../lib/response';
 import { crawlWebsite, scrapePage } from '../lib/search';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
+import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
+
+const scheduler = new SchedulerClient({});
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -101,6 +104,138 @@ function isFollowUp(msg: string, hasRecent: boolean): boolean {
     /^(cuanto|cu[áa]nto)\s+(sale|cuesta)/i,
     /^me\s+(llevo|quedo)/i, /^(lo|la)\s+quiero/i,
   ].some(p => p.test(msg.trim()));
+}
+
+// ============================================================
+// SCRAPER HELPERS
+// ============================================================
+
+export async function runScraper(tenantId: string): Promise<{ productsCount: number; newCount: number; updatedCount: number }> {
+  const cfg = await getItem(keys.scraperConfig(tenantId));
+  if (!cfg || !cfg.extractorCode) throw new Error('No hay configuración de scraper guardada.');
+
+  const pages = (cfg.pages || []) as { url: string; category: string }[];
+  const baseUrl = cfg.baseUrl as string;
+
+  const existing = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
+  const existingMap = new Map<string, any>();
+  for (const p of existing) existingMap.set((p as any).name.toLowerCase().trim(), p);
+
+  const now = new Date().toISOString();
+  const allProducts = new Map<string, any>();
+
+  for (let i = 0; i < pages.length; i += 3) {
+    const batch = pages.slice(i, i + 3);
+    const results = await Promise.allSettled(batch.map(async (page) => {
+      const scraped = await scrapePage(page.url);
+      if (!scraped || scraped.content.length < 50) return [];
+      try {
+        const fn = new Function('markdown', 'category', cfg.extractorCode as string);
+        return (fn(scraped.content, page.category) as any[]) || [];
+      } catch (err) {
+        console.error(`[SCRAPER-RUN] extractFn error for ${page.url}:`, err);
+        return [];
+      }
+    }));
+    for (const r of results) {
+      if (r.status !== 'fulfilled') continue;
+      for (const product of r.value) {
+        if (!product.name || product.name.length < 3) continue;
+        const key = product.name.toLowerCase().trim();
+        if (!allProducts.has(key)) allProducts.set(key, product);
+      }
+    }
+  }
+
+  let newCount = 0, updatedCount = 0;
+  for (const [key, product] of allProducts) {
+    const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : (product.price || 0);
+    const st = [product.name, product.category, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
+
+    if (existingMap.has(key)) {
+      const old = existingMap.get(key) as any;
+      await putItem({ ...old, price: product.price || 'Consultar', priceNum, description: product.description || '', imageUrl: product.imageUrl || old.imageUrl || '', updatedAt: now });
+      updatedCount++;
+    } else {
+      const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      await putItem({
+        PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
+        tenantId, productId, name: product.name, description: product.description || '',
+        price: product.price || 'Consultar', priceNum, category: product.category || '',
+        brand: product.brand || '', imageUrl: product.imageUrl || '',
+        sourceUrl: baseUrl, searchableText: st,
+        categoryNormalized: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
+        sizes: product.sizes || [], outOfStockSizes: product.outOfStockSizes || [],
+        attributes: product.attributes || {}, createdAt: now,
+      });
+      newCount++;
+    }
+  }
+
+  await putItem({ ...(cfg as any), lastRun: now });
+  return { productsCount: allProducts.size, newCount, updatedCount };
+}
+
+async function generateExtractorCode(sampleMarkdown: string, sampleProducts: any[]): Promise<string> {
+  const res = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 2000,
+    messages: [{
+      role: 'user',
+      content: `Analizá este markdown de una tienda online y los productos ya extraídos de él.
+Escribí el CUERPO de una función JavaScript (sin la firma "function extractProducts(...)") que:
+- Recibe dos argumentos disponibles: \`markdown\` (string) y \`category\` (string)
+- Parsea el markdown para encontrar todos los productos
+- Usa regex o string parsing específico para ESTA estructura de sitio
+- Hace return de un array de objetos: [{name, price, description, category, imageUrl, brand, sizes}]
+- Solo JavaScript vanilla, sin imports ni require()
+- Si no puede extraer productos, hace return []
+
+MARKDOWN DE MUESTRA (primeros 6000 caracteres):
+${sampleMarkdown.slice(0, 6000)}
+
+PRODUCTOS YA EXTRAÍDOS (referencia de lo que debe encontrar):
+${JSON.stringify(sampleProducts.slice(0, 10), null, 2)}
+
+IMPORTANTE: Devolvé SOLO el código JavaScript del cuerpo de la función. Sin markdown, sin explicaciones, sin backticks, sin la firma.`,
+    }],
+  });
+  const code = res.content[0].type === 'text' ? res.content[0].text.trim() : '';
+  // Strip accidental markdown fences
+  return code.replace(/^```(?:javascript|js)?\n?/i, '').replace(/\n?```$/i, '').trim();
+}
+
+async function upsertSchedules(tenantId: string, hours: number[]) {
+  const lambdaArn = process.env.API_LAMBDA_ARN;
+  const roleArn = process.env.SCHEDULER_ROLE_ARN;
+  if (!lambdaArn || !roleArn) {
+    console.warn('[SCRAPER-SCHEDULE] API_LAMBDA_ARN or SCHEDULER_ROLE_ARN not set, skipping EventBridge creation');
+    return;
+  }
+
+  // Delete existing rules for this tenant
+  for (let h = 0; h < 24; h++) {
+    try {
+      await scheduler.send(new DeleteScheduleCommand({ Name: `scraper-${tenantId}-h${h}`, GroupName: 'default' }));
+    } catch {}
+  }
+
+  // Create new rules
+  for (const hour of hours) {
+    await scheduler.send(new CreateScheduleCommand({
+      Name: `scraper-${tenantId}-h${hour}`,
+      GroupName: 'default',
+      ScheduleExpression: `cron(0 ${hour} * * ? *)`,
+      ScheduleExpressionTimezone: 'America/Argentina/Buenos_Aires',
+      Target: {
+        Arn: lambdaArn,
+        RoleArn: roleArn,
+        Input: JSON.stringify({ action: 'scrape-run', tenantId }),
+      },
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      State: 'ENABLED',
+    }));
+  }
 }
 
 // ============================================================
@@ -600,10 +735,84 @@ JSON: {"products":[...],"businessInfo":"..."}`,
         }
       }
 
+      // Generate extractor script and save scraper config
+      try {
+        const samplePage = pagesToScrape[0];
+        const sampleMarkdown = (samplePage?.url === url ? mainPage.content : (await scrapePage(samplePage?.url || url))?.content) || mainPage.content;
+        const sampleProducts = Array.from(allProducts.values()).slice(0, 15);
+        const extractorCode = await generateExtractorCode(sampleMarkdown, sampleProducts);
+        const existingCfg = await getItem(keys.scraperConfig(tenantId));
+        await putItem({
+          ...(existingCfg || {}),
+          ...keys.scraperConfig(tenantId),
+          tenantId, baseUrl: url,
+          pages: pagesToScrape,
+          extractorCode,
+          schedule: (existingCfg as any)?.schedule || { enabled: false, timesPerDay: 1, hours: [9] },
+          lastRun: now,
+          createdAt: (existingCfg as any)?.createdAt || now,
+          updatedAt: now,
+        });
+      } catch (err) {
+        console.error('[SCRAPER] Failed to generate extractor code:', err);
+      }
+
       return json({ productsCount: allProducts.size, pagesScanned: pagesToScrape.length, products: Array.from(allProducts.values()).slice(0, 30), businessInfo: businessInfo.slice(0, 500) });
     } catch (err: any) {
       return error('Error: ' + err.message, 500);
     }
+  }
+
+  // ============================================================
+  // POST /agents/scrape/run — RE-RUN WITHOUT AI
+  // ============================================================
+  if (method === 'POST' && path === '/agents/scrape/run') {
+    try {
+      const result = await runScraper(tenantId);
+      return json(result);
+    } catch (err: any) {
+      return error('Error: ' + err.message, 500);
+    }
+  }
+
+  // ============================================================
+  // GET /agents/scrape/schedule — GET SCHEDULE CONFIG
+  // ============================================================
+  if (method === 'GET' && path === '/agents/scrape/schedule') {
+    const cfg = await getItem(keys.scraperConfig(tenantId));
+    if (!cfg) return json({ configured: false });
+    return json({
+      configured: true,
+      baseUrl: cfg.baseUrl,
+      lastRun: cfg.lastRun,
+      schedule: cfg.schedule || { enabled: false, timesPerDay: 1, hours: [9] },
+    });
+  }
+
+  // ============================================================
+  // PUT /agents/scrape/schedule — SAVE SCHEDULE + EVENTBRIDGE
+  // ============================================================
+  if (method === 'PUT' && path === '/agents/scrape/schedule') {
+    const body = JSON.parse(event.body || '{}');
+    const { enabled, timesPerDay, hours } = body;
+    if (!Array.isArray(hours)) return error('hours array is required');
+
+    const cfg = await getItem(keys.scraperConfig(tenantId));
+    if (!cfg) return error('Primero debés hacer un escaneo inicial.', 400);
+
+    const schedule = { enabled: !!enabled, timesPerDay: timesPerDay || hours.length, hours };
+    await putItem({ ...(cfg as any), schedule, updatedAt: new Date().toISOString() });
+
+    if (enabled && hours.length > 0) {
+      try { await upsertSchedules(tenantId, hours); } catch (err) {
+        console.error('[SCRAPER-SCHEDULE] EventBridge error:', err);
+      }
+    } else {
+      // Disable: delete existing rules
+      try { await upsertSchedules(tenantId, []); } catch {}
+    }
+
+    return json({ ok: true, schedule });
   }
 
   return error('Not found', 404);

@@ -218,6 +218,25 @@ COMPOSE`,
     incomingMessagesQueue.grantSendMessages(webhookLambda);
     incomingMessagesQueue.grantSendMessages(apiLambda);
 
+    // EventBridge Scheduler role (allows Scheduler to invoke the API Lambda)
+    const schedulerRole = new iam.Role(this, 'ScraperSchedulerRole', {
+      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+    });
+    schedulerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [apiLambda.functionArn],
+    }));
+
+    // Allow the API Lambda to manage EventBridge Scheduler rules
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:UpdateSchedule', 'scheduler:GetSchedule'],
+      resources: [`arn:aws:scheduler:${this.region}:${this.account}:schedule/default/scraper-*`],
+    }));
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:PassRole'],
+      resources: [schedulerRole.roleArn],
+    }));
+
     messageProcessorLambda.addEventSource(
       new lambdaEventSources.SqsEventSource(incomingMessagesQueue, { batchSize: 1 })
     );
@@ -245,6 +264,8 @@ COMPOSE`,
     });
 
     apiLambda.addEnvironment('API_BASE_URL', (httpApi.url ?? '').replace(/\/$/, ''));
+    apiLambda.addEnvironment('API_LAMBDA_ARN', apiLambda.functionArn);
+    apiLambda.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
 
     // ========== Outputs ==========
     new cdk.CfnOutput(this, 'ApiUrl', { value: httpApi.url ?? '' });

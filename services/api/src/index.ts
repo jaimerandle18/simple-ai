@@ -3,7 +3,7 @@ import { json, error } from './lib/response';
 import { handleAuth } from './routes/auth';
 import { handleTenants } from './routes/tenants';
 import { handleConversations } from './routes/conversations';
-import { handleAgents } from './routes/agents';
+import { handleAgents, runScraper } from './routes/agents';
 import { handleContacts } from './routes/contacts';
 import { handleTest } from './routes/test';
 import { handleFiles } from './routes/files';
@@ -14,10 +14,23 @@ import { handleGolden } from './routes/golden';
 import { handleRegression } from './routes/regression';
 
 export const handler = async (
-  event: APIGatewayProxyEventV2
-): Promise<APIGatewayProxyResultV2> => {
-  const path = event.requestContext.http.path;
-  const method = event.requestContext.http.method;
+  event: any
+): Promise<any> => {
+  // EventBridge Scheduler event
+  if ((event as any).action === 'scrape-run' && (event as any).tenantId) {
+    try {
+      const result = await runScraper((event as any).tenantId);
+      console.log(`[SCRAPER-SCHEDULED] tenant=${(event as any).tenantId}`, result);
+      return { ok: true, ...result };
+    } catch (err: any) {
+      console.error('[SCRAPER-SCHEDULED] error:', err);
+      return { ok: false, error: err.message };
+    }
+  }
+
+  const httpEvent = event as APIGatewayProxyEventV2;
+  const path = httpEvent.requestContext.http.path;
+  const method = httpEvent.requestContext.http.method;
 
   try {
     // Health check
@@ -26,18 +39,18 @@ export const handler = async (
     }
 
     // Route to handlers
-    if (path.startsWith('/auth')) return handleAuth(event);
-    if (path.startsWith('/tenants')) return handleTenants(event);
-    if (path.startsWith('/conversations')) return handleConversations(event);
-    if (path.startsWith('/agents')) return handleAgents(event);
-    if (path.startsWith('/channels')) return handleChannels(event);
-    if (path.startsWith('/contacts')) return handleContacts(event);
-    if (path.startsWith('/metrics')) return handleMetrics(event);
-    if (path.startsWith('/onboarding')) return handleOnboarding(event);
-    if (path.startsWith('/golden')) return handleGolden(event);
-    if (path.startsWith('/regression')) return handleRegression(event);
-    if (path.startsWith('/files')) return handleFiles(event);
-    if (path.startsWith('/test')) return handleTest(event);
+    if (path.startsWith('/auth')) return handleAuth(httpEvent);
+    if (path.startsWith('/tenants')) return handleTenants(httpEvent);
+    if (path.startsWith('/conversations')) return handleConversations(httpEvent);
+    if (path.startsWith('/agents')) return handleAgents(httpEvent);
+    if (path.startsWith('/channels')) return handleChannels(httpEvent);
+    if (path.startsWith('/contacts')) return handleContacts(httpEvent);
+    if (path.startsWith('/metrics')) return handleMetrics(httpEvent);
+    if (path.startsWith('/onboarding')) return handleOnboarding(httpEvent);
+    if (path.startsWith('/golden')) return handleGolden(httpEvent);
+    if (path.startsWith('/regression')) return handleRegression(httpEvent);
+    if (path.startsWith('/files')) return handleFiles(httpEvent);
+    if (path.startsWith('/test')) return handleTest(httpEvent);
 
     return error('Not found', 404);
   } catch (err: any) {

@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:@aws-sdk/*",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:@aws-sdk/client-dynamodb --external:@aws-sdk/lib-dynamodb --external:@aws-sdk/client-s3 --external:@aws-sdk/s3-request-presigner --external:@aws-sdk/client-sqs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/client-scheduler": "^3.1045.0",
     "@aws-sdk/client-sqs": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@aws-sdk/s3-request-presigner": "^3.600.0",
