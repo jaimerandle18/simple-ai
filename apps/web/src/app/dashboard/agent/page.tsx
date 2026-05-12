@@ -1,8 +1,160 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/lib/useAuth';
 import { api } from '@/lib/api';
+
+interface Product {
+  productId: string;
+  name: string;
+  price: string;
+  priceNum: number;
+  category: string;
+  brand: string;
+  description: string;
+  imageUrl: string;
+  sizes: string[];
+}
+
+function CatalogModal({ tenantId, onClose }: { tenantId: string; onClose: () => void }) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    api('/agents/products', { tenantId })
+      .then(data => setProducts(data.products || []))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [tenantId]);
+
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const categories = Array.from(new Set(products.map(p => p.category).filter(Boolean))).sort();
+
+  const filtered = products.filter(p => {
+    const matchesCategory = !selectedCategory || p.category === selectedCategory;
+    if (!query.trim()) return matchesCategory;
+    const q = query.toLowerCase();
+    return matchesCategory && (
+      p.name?.toLowerCase().includes(q) ||
+      p.brand?.toLowerCase().includes(q) ||
+      p.category?.toLowerCase().includes(q) ||
+      p.description?.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100">
+          <div className="flex-1">
+            <h2 className="text-base font-semibold text-gray-900">Catálogo de productos</h2>
+            <p className="text-xs text-gray-400 mt-0.5">{loading ? 'Cargando...' : `${filtered.length} de ${products.length} productos`}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Search + filter */}
+        <div className="flex gap-2 px-5 py-3 border-b border-gray-100">
+          <div className="relative flex-1">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+            </svg>
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Buscar por nombre, marca, descripción..."
+              className="w-full pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+            />
+          </div>
+          {categories.length > 0 && (
+            <select
+              value={selectedCategory}
+              onChange={e => setSelectedCategory(e.target.value)}
+              className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-primary-500 text-gray-700"
+            >
+              <option value="">Todas las categorías</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
+        </div>
+
+        {/* Grid */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <div className="flex items-center justify-center h-48">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+              <svg className="w-10 h-10 mb-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+              <p className="text-sm">{products.length === 0 ? 'No hay productos en el catálogo' : 'No se encontraron resultados'}</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {filtered.map(p => (
+                <div key={p.productId} className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
+                  {/* Image */}
+                  <div className="aspect-square bg-gray-100 overflow-hidden">
+                    {p.imageUrl ? (
+                      <img
+                        src={p.imageUrl}
+                        alt={p.name}
+                        className="w-full h-full object-cover"
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <svg className="w-10 h-10 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  {/* Info */}
+                  <div className="p-3">
+                    <p className="text-xs text-gray-400 truncate">{p.category || p.brand || ' '}</p>
+                    <p className="text-sm font-medium text-gray-900 leading-snug mt-0.5 line-clamp-2">{p.name}</p>
+                    <p className="text-sm font-semibold text-primary-600 mt-1">{p.price || 'Consultar'}</p>
+                    {p.sizes?.length > 0 && (
+                      <p className="text-xs text-gray-400 mt-1 truncate">Talles: {p.sizes.join(', ')}</p>
+                    )}
+                    {p.description && (
+                      <p className="text-xs text-gray-400 mt-1 line-clamp-2">{p.description}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const SCRAPE_STEPS = [
   { label: 'Accediendo a la web', delay: 0 },
@@ -78,6 +230,8 @@ export default function ScraperPage() {
   const [scrapeStep, setScrapeStep] = useState(-1);
   const [scrapeFinishedCount, setScrapeFinishedCount] = useState<number | null>(null);
   const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [showCatalog, setShowCatalog] = useState(false);
+  const closeCatalog = useCallback(() => setShowCatalog(false), []);
 
   useEffect(() => {
     if (!tenantId) return;
@@ -258,7 +412,20 @@ export default function ScraperPage() {
       <div className="space-y-6">
         {/* Scraper */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-gray-900 mb-2">Escanear tu web</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-base font-semibold text-gray-900">Escanear tu web</h2>
+            {(config.websiteScraped || config.productsCount > 0) && (
+              <button
+                onClick={() => setShowCatalog(true)}
+                className="flex items-center gap-1.5 text-sm text-primary-600 font-medium hover:text-primary-700 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
+                </svg>
+                Ver catálogo
+              </button>
+            )}
+          </div>
           <p className="text-xs text-gray-500 mb-4">
             Ingresa la URL de tu tienda y extraemos los productos automaticamente. El agente los usa para responder cuando un cliente pregunta.
           </p>
@@ -503,6 +670,10 @@ export default function ScraperPage() {
           )}
         </div>
       </div>
+
+      {showCatalog && tenantId && (
+        <CatalogModal tenantId={tenantId} onClose={closeCatalog} />
+      )}
     </div>
   );
 }

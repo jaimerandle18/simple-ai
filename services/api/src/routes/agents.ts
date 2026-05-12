@@ -776,6 +776,27 @@ JSON: {"products":[...],"businessInfo":"..."}`,
   }
 
   // ============================================================
+  // GET /agents/products — LIST ALL PRODUCTS
+  // ============================================================
+  if (method === 'GET' && path === '/agents/products') {
+    const items = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
+    const products = items
+      .filter((p: any) => p.PK !== 'DELETED' && p.name && p.name.length > 1)
+      .map((p: any) => ({
+        productId: p.productId,
+        name: p.name,
+        price: p.price,
+        priceNum: p.priceNum,
+        category: p.category,
+        brand: p.brand,
+        description: p.description,
+        imageUrl: p.imageUrl,
+        sizes: p.sizes,
+      }));
+    return json({ products, total: products.length });
+  }
+
+  // ============================================================
   // GET /agents/scrape/schedule — GET SCHEDULE CONFIG
   // ============================================================
   if (method === 'GET' && path === '/agents/scrape/schedule') {
