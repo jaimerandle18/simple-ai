@@ -436,31 +436,117 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
     if (!url) return error('url is required');
 
     try {
-      const pages = await crawlWebsite(url);
-      if (pages.length === 0) {
-        const main = await scrapePage(url);
-        if (main) pages.push(main);
+      // PASO 1: Scrapear la página principal para entender la estructura
+      const mainPage = await scrapePage(url);
+      if (!mainPage) return error('No se pudo acceder a la web.', 400);
+
+      // PASO 2: Haiku analiza la web y encuentra las URLs de categorías/productos
+      const discoveryRes = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
+        system: `Analizas paginas web de tiendas online. Tu trabajo es encontrar TODAS las URLs de categorias o listados de productos.
+
+Busca en el contenido:
+- Links a categorias (ej: /categoria/remeras, /products/hoodies)
+- Links a secciones de la tienda (ej: /tienda, /shop, /productos)
+- Links de navegacion del menu que lleven a productos
+- Links de paginacion (ej: ?page=2)
+
+Devolvé JSON: {"categories": [{"url": "URL_COMPLETA", "name": "nombre de la categoria"}], "isProductPage": bool, "hasPagination": bool}
+
+Si la pagina YA ES un listado de productos (no hace falta navegar mas), pon isProductPage=true.
+Si es un home o landing, busca los links a las secciones de productos.
+Construi URLs completas (no relativas).`,
+        messages: [{ role: 'user', content: `URL base: ${url}\n\nContenido:\n${mainPage.content.slice(0, 12000)}` }],
+      });
+      const discoveryText = discoveryRes.content[0].type === 'text' ? discoveryRes.content[0].text : '{}';
+      let discovery: any;
+      try {
+        discovery = JSON.parse(discoveryText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+      } catch {
+        discovery = { categories: [], isProductPage: true };
       }
-      if (pages.length === 0) return error('No se pudieron obtener páginas.', 400);
 
-      // Delete old products
-      const old = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1000 });
-      for (const o of old) await putItem({ ...(o as any), PK: 'DELETED', SK: (o as any).SK });
+      // PASO 3: Armar lista de páginas a scrapear
+      const pagesToScrape: { url: string; category: string }[] = [];
 
-      const allProducts: any[] = [];
+      if (discovery.isProductPage) {
+        pagesToScrape.push({ url, category: '' });
+      }
+
+      for (const cat of (discovery.categories || []).slice(0, 30)) {
+        if (cat.url && cat.url.startsWith('http')) {
+          pagesToScrape.push({ url: cat.url, category: cat.name || '' });
+        }
+      }
+
+      // Si no encontró nada, usar Google Search como fallback
+      if (pagesToScrape.length === 0) {
+        const googlePages = await crawlWebsite(url);
+        for (const p of googlePages) pagesToScrape.push({ url: p.url, category: '' });
+      }
+
+      if (pagesToScrape.length === 0) {
+        pagesToScrape.push({ url, category: '' });
+      }
+
+      console.log(`[SCRAPE] ${pagesToScrape.length} pages to scrape`);
+
+      // PASO 4: Scrapear cada página + extraer productos
+      const allProducts = new Map<string, any>();
       let businessInfo = '';
       const now = new Date().toISOString();
 
-      for (let i = 0; i < pages.length; i += 3) {
-        const batch = pages.slice(i, i + 3).filter(p => p.content.length > 50);
+      // Delete old products
+      const old = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
+      for (const o of old) await putItem({ ...(o as any), PK: 'DELETED', SK: (o as any).SK });
+
+      for (let i = 0; i < pagesToScrape.length; i += 3) {
+        const batch = pagesToScrape.slice(i, i + 3);
         const results = await Promise.allSettled(batch.map(async (page) => {
+          // Scrapear la página (skip si es la main que ya tenemos)
+          let content = page.url === url ? mainPage.content : '';
+          if (!content) {
+            const scraped = await scrapePage(page.url);
+            content = scraped?.content || '';
+          }
+          if (content.length < 50) return { products: [], businessInfo: '', pageUrl: page.url };
+
+          // Scrapear paginación (página 2)
+          let page2Content = '';
+          try {
+            const p2url = page.url.includes('?') ? page.url + '&page=2' : page.url + '?page=2';
+            const p2 = await scrapePage(p2url);
+            if (p2 && p2.content.length > 500) page2Content = p2.content;
+          } catch {}
+
+          const fullContent = content + (page2Content ? '\n\n--- PAGINA 2 ---\n\n' + page2Content : '');
+
           const res = await anthropic.messages.create({
             model: 'claude-haiku-4-5-20251001', max_tokens: 4000,
-            system: `Extraé TODOS los productos de este contenido web argentino.
-Para cada producto: {"name","description" (materiales, talles, colores, specs),"price" (exacto),"category","imageUrl","brand"}
-También extraé info del negocio: envíos, cambios, devoluciones, pagos, horarios, dirección.
+            system: `Extraé TODOS los productos de esta pagina web de un comercio argentino.
+
+Para CADA producto devolvé:
+- "name": nombre completo (marca + modelo si aplica)
+- "description": descripcion con specs (materiales, talles disponibles, colores, watts, capacidad, medidas, etc)
+- "price": precio EXACTO como aparece. Si no hay → "Consultar"
+- "category": "${page.category || 'detectar automaticamente'}"
+- "imageUrl": URL de la imagen (.jpg/.jpeg/.png/.webp). URL completa, no relativa
+- "brand": marca si la hay
+- "sizes": array de talles disponibles si es ropa/calzado (ej: ["S","M","L","XL"])
+- "outOfStockSizes": talles agotados si se indica
+- "attributes": objeto con specs tecnicas clave (ej: {"potencia_w": 800, "voltaje_v": 220})
+
+REGLAS:
+- Solo productos REALES que se venden en la pagina
+- Precio exacto, NO inventar
+- Si hay variantes de un producto (colores, talles), listar como UN producto con sizes/colores en description
+- Incluir TODOS los productos, no solo los primeros
+- URLs de imagenes COMPLETAS (empiezan con http)
+
+Tambien extraé info del negocio si la hay: envios, cambios, devoluciones, pagos, horarios, direccion, contacto.
+
 JSON: {"products":[...],"businessInfo":"..."}`,
-            messages: [{ role: 'user', content: page.content.slice(0, 10000) }],
+            messages: [{ role: 'user', content: fullContent.slice(0, 15000) }],
           });
           const text = res.content[0].type === 'text' ? res.content[0].text : '{}';
           try {
@@ -477,21 +563,28 @@ JSON: {"products":[...],"businessInfo":"..."}`,
           if (r.value.businessInfo) businessInfo += r.value.businessInfo + '\n';
           for (const product of r.value.products) {
             if (!product.name || product.name.length < 3) continue;
-            if (allProducts.some(p => p.name.toLowerCase() === product.name.toLowerCase())) continue;
+            const key = product.name.toLowerCase().trim();
+            if (allProducts.has(key)) continue; // dedup
+
             const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
             const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : product.price || 0;
             const st = [product.name, product.category, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
-            await putItem({
+
+            const item = {
               PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
               tenantId, productId, name: product.name, description: product.description || '',
               price: product.price || 'Consultar', priceNum, category: product.category || '',
               brand: product.brand || '', imageUrl: product.imageUrl || '', pageUrl: r.value.pageUrl,
-              sourceUrl: url, attributes: {}, searchableText: st,
+              sourceUrl: url, searchableText: st,
               categoryNormalized: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
               categoryParent: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
+              sizes: product.sizes || [],
+              outOfStockSizes: product.outOfStockSizes || [],
+              attributes: product.attributes || {},
               createdAt: now,
-            });
-            allProducts.push({ name: product.name, price: product.price, category: product.category, imageUrl: product.imageUrl });
+            };
+            await putItem(item);
+            allProducts.set(key, { name: product.name, price: product.price, category: product.category, imageUrl: product.imageUrl });
           }
         }
       }
@@ -507,7 +600,7 @@ JSON: {"products":[...],"businessInfo":"..."}`,
         }
       }
 
-      return json({ productsCount: allProducts.length, pagesScanned: pages.length, products: allProducts.slice(0, 30), businessInfo: businessInfo.slice(0, 500) });
+      return json({ productsCount: allProducts.size, pagesScanned: pagesToScrape.length, products: Array.from(allProducts.values()).slice(0, 30), businessInfo: businessInfo.slice(0, 500) });
     } catch (err: any) {
       return error('Error: ' + err.message, 500);
     }
