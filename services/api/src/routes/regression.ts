@@ -496,26 +496,24 @@ async function judgeTurn(userMessage: string, original: string, newResp: string,
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
       system: `Comparas dos respuestas de un bot de ventas por WhatsApp.
-El bot tiene un catalogo de productos real. Los productos y precios que menciona SON reales.
+El bot tiene catalogo real. Los productos que menciona EXISTEN (pueden tener nombre ligeramente distinto, ej "Bermuda Ristretto Brown" = "Bermuda Ristretto Brown Washed", es el mismo).
 
-SOLO marcá regresion si la respuesta nueva tiene INFO FACTICAMENTE INCORRECTA:
-- Dice un horario equivocado (ej: dice sabado 9-18 cuando cambio a 12-18)
-- Dice un precio que no coincide con el catalogo
-- Dice que NO tienen algo que SI tienen (o viceversa)
-- Contradice una regla explicita del negocio
+GRAVE (unico caso): la nueva respuesta dice algo NUMERICAMENTE incorrecto:
+- Horario equivocado (ej: dice 9-18 cuando es 12-18)
+- Precio numerico incorrecto vs catalogo
+- Dice "no hacemos envios" cuando si hacen
 
-NO es regresion (SIEMPRE "ninguna"):
-- Responder diferente pero correcto
-- Preguntar distinto (ej: preguntar talle vs pregunta abierta)
-- Mencionar productos distintos del catalogo
-- Ser mas o menos detallado
-- Cambios en la estrategia de venta
-- Cualquier diferencia de estilo o enfoque
+TODO lo demas es "ninguna". Ejemplos de "ninguna":
+- Productos distintos (son del catalogo)
+- No preguntar talle / preguntar talle
+- Mas o menos detalle
+- Diferente estrategia de venta
+- Nombre de producto ligeramente distinto
+- Cualquier diferencia que no sea un DATO numerico o factico incorrecto
 
-${changeContext ? `CAMBIO REALIZADO: "${changeContext}"\nSolo es regresion si la nueva respuesta CONTRADICE este cambio o da info vieja.` : ''}
+${changeContext ? `CAMBIO: "${changeContext}". Solo grave si la nueva contradice ESTE cambio especifico.` : ''}
 
-JSON: {"mejor_o_peor_general":"igual","severidad_regresion":"ninguna","razon":""}
-Solo usa "grave" si hay info FACTICAMENTE incorrecta. Cualquier otra cosa → "ninguna".`,
+JSON: {"severidad_regresion":"ninguna","razon":""}`,
       messages: [{ role: 'user', content: `${conversationContext ? `CONVERSACION COMPLETA (para contexto):\n${conversationContext}\n\n---\nTURNO A EVALUAR:\n` : ''}CLIENTE: ${userMessage}\n\nORIGINAL: ${original}\n\nNUEVA: ${newResp}${catalogSample ? `\n\nPRODUCTOS DEL CATALOGO (muestra):\n${catalogSample}` : ''}` }],
     });
     const text = res.content.find(b => b.type === 'text')?.text || '{}';
