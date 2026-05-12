@@ -12,6 +12,9 @@ export default function SettingsPage() {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
+  const [justConnected, setJustConnected] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
+  const [pushName, setPushName] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const tenantId = (session?.user as any)?.tenantId;
@@ -31,6 +34,8 @@ export default function SettingsPage() {
       const data = await res.json();
       const s: WahaStatus = data.status || 'NOT_CONFIGURED';
       setWahaStatus(s);
+      if (data.phone) setPhoneNumber(data.phone);
+      if (data.pushName) setPushName(data.pushName);
       if (s === 'SCAN_QR_CODE') fetchQr();
       if (s === 'STARTING' || s === 'SCAN_QR_CODE') startPolling();
     } catch {}
@@ -58,9 +63,13 @@ export default function SettingsPage() {
         if (s === 'SCAN_QR_CODE') {
           fetchQr();
         } else if (s === 'WORKING') {
+          if (data.phone) setPhoneNumber(data.phone);
+          if (data.pushName) setPushName(data.pushName);
           setQrCode(null);
           clearInterval(pollRef.current!);
           setConnecting(false);
+          setJustConnected(true);
+          setTimeout(() => setJustConnected(false), 4000);
         } else if (s === 'STOPPED' || s === 'FAILED') {
           clearInterval(pollRef.current!);
           setConnecting(false);
@@ -171,19 +180,40 @@ export default function SettingsPage() {
 
           {/* Conectado */}
           {isConnected && (
-            <div className="flex items-center justify-between p-4 bg-green-50 border border-green-100 rounded-xl">
-              <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-                WhatsApp vinculado correctamente
+            <div className="space-y-3">
+              {/* Banner éxito momentáneo */}
+              {justConnected && (
+                <div className="flex items-center gap-2 p-3 bg-green-500 text-white text-sm font-semibold rounded-xl animate-pulse">
+                  <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  ¡Conexión exitosa! WhatsApp vinculado correctamente
+                </div>
+              )}
+
+              {/* Info del número */}
+              <div className="flex items-center justify-between p-4 bg-green-50 border border-green-100 rounded-xl">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-green-700 text-sm font-medium">
+                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Funcionando correctamente
+                  </div>
+                  {phoneNumber && (
+                    <p className="text-sm text-gray-600 pl-6">
+                      <span className="font-medium">+{phoneNumber}</span>
+                      {pushName && <span className="text-gray-400"> · {pushName}</span>}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={handleDisconnect}
+                  className="text-xs text-gray-400 hover:text-red-500 transition-colors shrink-0"
+                >
+                  Desvincular
+                </button>
               </div>
-              <button
-                onClick={handleDisconnect}
-                className="text-xs text-gray-400 hover:text-red-500 transition-colors"
-              >
-                Desvincular
-              </button>
             </div>
           )}
 

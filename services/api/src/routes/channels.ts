@@ -138,7 +138,8 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
       const res = await wahaFetch(base, process.env.WAHA_API_KEY || '', `/api/sessions/${SESSION}`);
       if (!res.ok) return json({ status: 'STOPPED' });
       const data: any = await res.json();
-      return json({ status: data.status || 'STOPPED' });
+      const phone = data.me?.id ? data.me.id.replace('@c.us', '').replace('@s.whatsapp.net', '') : null;
+      return json({ status: data.status || 'STOPPED', phone, pushName: data.me?.pushName || null });
     } catch {
       return json({ status: 'STOPPED' });
     }
