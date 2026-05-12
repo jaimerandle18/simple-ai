@@ -31,6 +31,10 @@ export async function putItem(item: Record<string, unknown>) {
   await db.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
 }
 
+export async function deleteItem(key: { PK: string; SK: string }) {
+  await db.send(new DeleteCommand({ TableName: TABLE_NAME, Key: key }));
+}
+
 export async function queryItems(pk: string, skPrefix?: string, options?: { indexName?: string; limit?: number; scanForward?: boolean }) {
   const params: any = {
     TableName: TABLE_NAME,

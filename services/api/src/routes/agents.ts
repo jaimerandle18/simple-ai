@@ -1,5 +1,5 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
+import { keys, getItem, putItem, deleteItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
 import { crawlWebsite, scrapePage, mapSite } from '../lib/search';
 import Anthropic from '@anthropic-ai/sdk';
@@ -110,7 +110,7 @@ function isFollowUp(msg: string, hasRecent: boolean): boolean {
 // SCRAPER HELPERS
 // ============================================================
 
-export async function runScraper(tenantId: string): Promise<{ productsCount: number; newCount: number; updatedCount: number }> {
+export async function runScraper(tenantId: string): Promise<{ productsCount: number; newCount: number; updatedCount: number; removedCount?: number }> {
   const cfg = await getItem(keys.scraperConfig(tenantId));
   if (!cfg || !cfg.extractorCode) throw new Error('No hay configuración de scraper guardada.');
 
@@ -161,6 +161,15 @@ export async function runScraper(tenantId: string): Promise<{ productsCount: num
     return { productsCount: allProducts.size, newCount: 0, updatedCount: 0, skipped: true } as any;
   }
 
+  // Borrar productos viejos que no están en el nuevo set
+  const removedKeys = new Set<string>();
+  for (const [key, item] of existingMap) {
+    if (!allProducts.has(key)) {
+      await deleteItem({ PK: (item as any).PK, SK: (item as any).SK });
+      removedKeys.add(key);
+    }
+  }
+
   let newCount = 0, updatedCount = 0;
   for (const [key, product] of allProducts) {
     const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : (product.price || 0);
@@ -187,7 +196,7 @@ export async function runScraper(tenantId: string): Promise<{ productsCount: num
   }
 
   await putItem({ ...(cfg as any), lastRun: now });
-  return { productsCount: allProducts.size, newCount, updatedCount };
+  return { productsCount: allProducts.size, newCount, updatedCount, removedCount: removedKeys.size };
 }
 
 async function generateExtractorCode(sampleMarkdown: string, sampleProducts: any[]): Promise<string> {
@@ -585,157 +594,121 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
     if (!url) return error('url is required');
 
     try {
-      // PASO 1: Scrapear la página principal y mapear todo el sitio en paralelo
+      // PASO 1: Scrapear homepage y mapear todo el sitio en paralelo
       const [mainPage, siteUrls] = await Promise.all([
-        scrapePage(url),
+        scrapePage(url, { waitFor: 1500 }),
         mapSite(url, 500),
       ]);
       if (!mainPage) return error('No se pudo acceder a la web.', 400);
+      console.log(`[SCRAPE] Site map: ${siteUrls.length} URLs`);
 
-      console.log(`[SCRAPE] Site map returned ${siteUrls.length} URLs`);
-
-      // Filtrar URLs de ruido del mapa del sitio
+      // PASO 2: Clasificación automática de páginas de listado (sin IA)
       const baseHostname = new URL(url).hostname;
-      const SKIP = /\/(cart|carrito|checkout|admin|login|wp-admin|wp-json|xmlrpc|account|cuenta|mi-cuenta|registro|register|password|reset|auth|oauth|buscar|search|blog|noticias|contacto|contact|sobre|about|politica|terms|privacy|cookie|sitemap|feed|rss)/i;
-      // Filtrar también páginas de producto individual (/producto/X, /item/X, /p/X)
-      const PRODUCT_PAGE = /\/(producto|product|item|p)\/[^/]+\/?$/i;
+
+      const SKIP_PATH = /\/(cart|carrito|checkout|login|wp-admin|wp-json|xmlrpc|mi-cuenta|account|register|registro|password|reset|auth|oauth|search|buscar|blog|noticias|contacto|contact|sobre-nosotros|quienes-somos|about|politica|privacy|terms|cookie|sitemap|feed|rss|wp-content|wp-includes|assets|fonts|cdn-cgi|static|media|uploads|thumbnail|resize)/i;
+      const SINGLE_PRODUCT = /\/(producto|product|item|articulo|p)\/[^/]+\/?$/i;
 
       const cleanUrls = siteUrls.filter(u => {
         try {
           const parsed = new URL(u);
           if (parsed.hostname !== baseHostname) return false;
-          const path = parsed.pathname;
-          if (SKIP.test(path)) return false;
-          if (PRODUCT_PAGE.test(path)) return false;
-          // Skip pagination URLs (those we handle ourselves)
-          if (/[?&](page|paged)=\d/.test(u)) return false;
+          if (SKIP_PATH.test(parsed.pathname)) return false;
+          if (SINGLE_PRODUCT.test(parsed.pathname)) return false;
+          if (/[?&](?:page|paged|pg)=\d/.test(u)) return false;
+          if (parsed.pathname === '/' || parsed.pathname === '') return false;
           return true;
         } catch { return false; }
       });
 
-      // Agrupar por primer segmento del path para identificar patrones
+      // Agrupar por primer segmento del path
       const pathGroups: Record<string, string[]> = {};
       for (const u of cleanUrls) {
         try {
-          const seg = new URL(u).pathname.split('/').filter(Boolean)[0] || '__root__';
+          const seg = new URL(u).pathname.split('/').filter(Boolean)[0] || '_root_';
           if (!pathGroups[seg]) pathGroups[seg] = [];
           pathGroups[seg].push(u);
         } catch {}
       }
-      // Segmentos más populares primero (indican secciones grandes = probablemente categorías)
-      const sortedGroups = Object.entries(pathGroups)
-        .sort((a, b) => b[1].length - a[1].length)
-        .slice(0, 20);
 
-      // Construir lista de URLs para Opus: máx 150 URLs representativas
-      const urlsForOpus: string[] = [];
-      for (const [, groupUrls] of sortedGroups) {
-        // Incluir hasta 8 URLs por grupo para que Opus vea el patrón
-        urlsForOpus.push(...groupUrls.slice(0, 8));
-        if (urlsForOpus.length >= 150) break;
-      }
+      // Segmentos que no son productos (info institucional)
+      const NON_PRODUCT_SEGS = new Set([
+        'empresa', 'nosotros', 'quienes-somos', 'historia', 'equipo', 'sucursales',
+        'franquicias', 'distribuidores', 'prensa', 'soporte', 'ayuda', 'garantia',
+        'envios', 'devoluciones', 'faq', 'preguntas', 'politicas', 'legales',
+        'terminos', 'newsletter', 'suscripcion', 'wishlist', 'favoritos', 'comparar',
+      ]);
 
-      // PASO 2: Opus selecciona las mejores páginas de listado de productos
-      const discoveryInput = urlsForOpus.length > 0
-        ? `URL base: ${url}\n\nURLS DISPONIBLES EN EL SITIO (${urlsForOpus.length} de ${cleanUrls.length} totales):\n${urlsForOpus.join('\n')}\n\n---\nCONTENIDO DEL HOMEPAGE (primeros 8000 chars):\n${mainPage.content.slice(0, 8000)}`
-        : `URL base: ${url}\n\nContenido:\n${mainPage.content.slice(0, 12000)}`;
+      // Grupos con 2+ URLs que no sean institucionales = secciones de productos
+      const listingGroups = Object.entries(pathGroups)
+        .filter(([seg, urls]) => urls.length >= 2 && !NON_PRODUCT_SEGS.has(seg.toLowerCase()))
+        .sort((a, b) => b[1].length - a[1].length);
 
-      const discoveryRes = await anthropic.messages.create({
-        model: 'claude-opus-4-7', max_tokens: 2000,
-        system: `Sos un experto en e-commerce. Tu tarea: identificar TODAS las páginas de LISTADO DE PRODUCTOS de esta tienda.
-
-REGLAS DE PRIORIDAD (muy importante):
-1. PRIMERO elegí páginas por TIPO DE PRODUCTO / CATEGORÍA (ej: herramientas eléctricas, motosierras, cortacésped, equipos de jardín). Son las que traen MÁS productos variados.
-2. SEGUNDO, como complemento, podés incluir páginas por MARCA (ej: /marcas/husqvarna) SOLO si no hay suficientes páginas de categoría, o si esa marca tiene página de listado rica.
-3. NUNCA incluyas páginas de producto individual.
-4. NUNCA incluyas home, carrito, checkout, login, contacto, blog.
-
-SEÑALES DE PÁGINA DE CATEGORÍA (preferir):
-- Path con palabras tipo: /categoria/, /productos/, /tienda/, /shop/, /coleccion/, /seccion/, /departamento/, /linea/
-- Varios URLs bajo el mismo prefijo que parecen tipos de producto
-
-SEÑALES DE PÁGINA DE MARCA (incluir solo como complemento):
-- Path con palabras: /marca/, /marcas/, /brand/, /fabricante/
-
-Si la URL base YA es un listado de productos, pon isProductPage=true.
-
-Devolvé SOLO JSON válido: {"categories": [{"url": "URL_COMPLETA", "name": "nombre", "type": "category|brand"}], "isProductPage": bool}
-Máximo 30 URLs. URLs deben ser completas (https://...).`,
-        messages: [{ role: 'user', content: discoveryInput }],
-      });
-      const discoveryText = discoveryRes.content[0].type === 'text' ? discoveryRes.content[0].text : '{}';
-      let discovery: any;
-      try {
-        discovery = JSON.parse(discoveryText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-      } catch {
-        discovery = { categories: [], isProductPage: true };
-      }
-
-      const categoryPages = (discovery.categories || []).filter((c: any) => c.type !== 'brand');
-      const brandPages = (discovery.categories || []).filter((c: any) => c.type === 'brand');
-      console.log(`[SCRAPE] Discovery: ${categoryPages.length} category pages, ${brandPages.length} brand pages`);
-
-      // PASO 3: Armar lista de páginas a scrapear
+      // PASO 3: Armar lista de páginas — TODAS las secciones (límite 150)
       const pagesToScrape: { url: string; category: string }[] = [];
+      const seenUrls = new Set<string>();
 
-      if (discovery.isProductPage) {
-        pagesToScrape.push({ url, category: '' });
-      }
-
-      // Agregar páginas de categoría primero (máx 20)
-      for (const cat of categoryPages.slice(0, 20)) {
-        if (cat.url && cat.url.startsWith('http')) {
-          pagesToScrape.push({ url: cat.url, category: cat.name || '' });
+      for (const [seg, groupUrls] of listingGroups) {
+        for (const pageUrl of groupUrls) {
+          if (seenUrls.has(pageUrl)) continue;
+          seenUrls.add(pageUrl);
+          pagesToScrape.push({ url: pageUrl, category: seg });
+          if (pagesToScrape.length >= 150) break;
         }
+        if (pagesToScrape.length >= 150) break;
       }
 
-      // Si no hay suficientes páginas de categoría, complementar con páginas de marca
-      if (pagesToScrape.length < 5) {
-        for (const cat of brandPages.slice(0, 20)) {
-          if (cat.url && cat.url.startsWith('http')) {
-            pagesToScrape.push({ url: cat.url, category: cat.name || '' });
+      // Fallback: si no se encontraron secciones claras, Haiku analiza el homepage
+      if (pagesToScrape.length < 3) {
+        console.log('[SCRAPE] Falling back to Haiku discovery');
+        const fallbackRes = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+          messages: [{ role: 'user', content: `URL: ${url}\n\nContenido:\n${mainPage.content.slice(0, 10000)}\n\nEncontrá TODAS las URLs de páginas de listado de productos (categorías, marcas, secciones). Devolvé JSON: {"urls": ["url1", "url2"], "isProductPage": bool}. Solo URLs completas (https://...).` }],
+        });
+        try {
+          const fb = JSON.parse((fallbackRes.content[0] as any).text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+          if (fb.isProductPage && !seenUrls.has(url)) { pagesToScrape.push({ url, category: '' }); seenUrls.add(url); }
+          for (const u of (fb.urls || [])) {
+            if (typeof u === 'string' && u.startsWith('http') && !seenUrls.has(u)) {
+              pagesToScrape.push({ url: u, category: '' });
+              seenUrls.add(u);
+            }
           }
-        }
+        } catch {}
       }
 
-      // Si no encontró nada, usar Google Search como fallback
-      if (pagesToScrape.length === 0) {
-        const googlePages = await crawlWebsite(url);
-        for (const p of googlePages) pagesToScrape.push({ url: p.url, category: '' });
+      // Incluir homepage si parece listado de productos y no está ya
+      const homepageHasProducts = /\$\s*[\d.,]+|precio|price|agregar.*carrito|add.*cart/i.test(mainPage.content);
+      if (homepageHasProducts && !seenUrls.has(url)) {
+        pagesToScrape.unshift({ url, category: '' });
+        seenUrls.add(url);
       }
 
-      if (pagesToScrape.length === 0) {
-        pagesToScrape.push({ url, category: '' });
-      }
+      if (pagesToScrape.length === 0) pagesToScrape.push({ url, category: '' });
 
-      console.log(`[SCRAPE] ${pagesToScrape.length} pages to scrape`);
+      console.log(`[SCRAPE] ${pagesToScrape.length} pages to scrape (from ${listingGroups.length} groups)`);
 
-      // PASO 4: Scrapear cada página + extraer productos
+      // PASO 4: Scrapear + extraer — acumular en memoria, guardar al final
       const allProducts = new Map<string, any>();
       let businessInfo = '';
       const now = new Date().toISOString();
 
-      // Delete old products
-      const old = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
-      for (const o of old) await putItem({ ...(o as any), PK: 'DELETED', SK: (o as any).SK });
-
-      // Scrape all pages of a category following pagination
+      // Seguir paginación de una página de listado
       const scrapeAllPages = async (baseUrl: string, firstContent: string): Promise<string> => {
         const parts = [firstContent];
-        // Try ?page=N, ?paged=N, /page/N/ — the three most common Argentine e-commerce patterns
-        for (let pageNum = 2; ; pageNum++) {
+        for (let pageNum = 2; pageNum <= 50; pageNum++) {
           const candidates = [
             baseUrl.includes('?') ? `${baseUrl}&page=${pageNum}` : `${baseUrl}?page=${pageNum}`,
             baseUrl.replace(/\/?$/, `/page/${pageNum}/`),
             baseUrl.includes('?') ? `${baseUrl}&paged=${pageNum}` : `${baseUrl}?paged=${pageNum}`,
+            `${baseUrl.replace(/\/?$/, '')}/${pageNum}/`,
           ];
           let found = false;
           for (const candidate of candidates) {
             try {
-              const scraped = await scrapePage(candidate);
-              if (!scraped || scraped.content.length < 400) continue;
-              // Stop if redirected back to page 1 (identical opening)
-              if (scraped.content.slice(0, 300) === firstContent.slice(0, 300)) break;
+              const scraped = await scrapePage(candidate, { waitFor: 1500 });
+              if (!scraped || scraped.content.length < 300) continue;
+              if (scraped.content.slice(0, 200) === firstContent.slice(0, 200)) continue; // Same page
+              if (scraped.content.slice(0, 200) === parts[parts.length - 1].slice(0, 200)) continue; // Same as last
               parts.push(scraped.content);
               found = true;
               break;
@@ -743,70 +716,63 @@ Máximo 30 URLs. URLs deben ser completas (https://...).`,
           }
           if (!found) break;
         }
-        return parts.join('\n\n---\n\n');
+        return parts.join('\n\n---PAGE_BREAK---\n\n');
       };
 
-      const EXTRACT_SYSTEM = (category: string) => `Extraé TODOS los productos de esta pagina web de un comercio argentino.
+      const EXTRACT_SYSTEM = (category: string) => `Extraé TODOS los productos de este contenido de una tienda online argentina.
 
-Para CADA producto devolvé:
-- "name": nombre completo (marca + modelo si aplica)
-- "description": descripcion con specs (materiales, talles disponibles, colores, watts, capacidad, medidas, etc)
-- "price": precio EXACTO como aparece. Si no hay → "Consultar"
-- "category": "${category || 'detectar automaticamente'}"
-- "imageUrl": URL completa de la imagen (.jpg/.jpeg/.png/.webp)
-- "brand": marca si la hay
-- "sizes": array de talles si es ropa/calzado
-- "outOfStockSizes": talles agotados si se indica
-- "attributes": objeto con specs tecnicas clave
+Devolvé JSON: {"products": [...], "businessInfo": "..."}
 
-REGLAS CRITICAS:
-- Incluir ABSOLUTAMENTE TODOS los productos, hasta el ultimo
-- Precio exacto tal como aparece, NO inventar
-- Si hay variantes (colores, talles), es UN producto con sizes en description
-- URLs de imagenes COMPLETAS (empiezan con http)
-- NO cortar la lista antes de terminar
+Cada producto:
+- "name": nombre completo (marca + modelo)
+- "price": precio exacto como aparece, o "Consultar"
+- "category": "${category || 'auto-detectar'}"
+- "imageUrl": URL completa de imagen (http...)
+- "brand": marca
+- "description": specs, materiales, dimensiones, colores
+- "sizes": [] (talles si aplica)
+- "attributes": {} (specs técnicas clave)
 
-También extraé info del negocio (envios, cambios, pagos, horarios) si la hay.
-
-JSON: {"products":[...],"businessInfo":"..."}`;
+CRÍTICO: incluir ABSOLUTAMENTE TODOS los productos sin excepción. No cortar.`;
 
       const extractFromContent = async (content: string, category: string, pageUrl: string) => {
-        const CHUNK = 28000;
+        const CHUNK = 30000;
         const allProds: any[] = [];
         let bizInfo = '';
-        // Split in chunks if content is very long
         for (let offset = 0; offset < content.length; offset += CHUNK) {
           const chunk = content.slice(offset, offset + CHUNK);
-          const res = await anthropic.messages.create({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 8000,
-            system: EXTRACT_SYSTEM(category),
-            messages: [{ role: 'user', content: chunk }],
-          });
-          const text = res.content[0].type === 'text' ? res.content[0].text : '{}';
+          if (chunk.trim().length < 100) continue;
           try {
+            const res = await anthropic.messages.create({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 8000,
+              system: EXTRACT_SYSTEM(category),
+              messages: [{ role: 'user', content: chunk }],
+            });
+            const text = res.content[0].type === 'text' ? res.content[0].text : '{}';
             const parsed = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
             allProds.push(...(parsed.products || []));
             if (parsed.businessInfo) bizInfo += parsed.businessInfo + ' ';
-          } catch {
-            const m = text.match(/\[[\s\S]*\]/);
+          } catch (err) {
+            // Try to extract array directly if JSON parse failed
+            const m = (err as any)?.message && content.match(/\[[\s\S]{50,}\]/);
             if (m) { try { allProds.push(...JSON.parse(m[0])); } catch {} }
           }
         }
         return { products: allProds, businessInfo: bizInfo.trim(), pageUrl };
       };
 
-      for (let i = 0; i < pagesToScrape.length; i += 3) {
-        const batch = pagesToScrape.slice(i, i + 3);
+      // Scrapear en batches de 5 páginas concurrentes
+      for (let i = 0; i < pagesToScrape.length; i += 5) {
+        const batch = pagesToScrape.slice(i, i + 5);
         const results = await Promise.allSettled(batch.map(async (page) => {
-          let firstContent = page.url === url ? mainPage.content : '';
-          if (!firstContent) {
-            const scraped = await scrapePage(page.url);
-            firstContent = scraped?.content || '';
-          }
-          if (firstContent.length < 50) return { products: [], businessInfo: '', pageUrl: page.url };
+          const firstContent = page.url === url
+            ? mainPage.content
+            : (await scrapePage(page.url, { waitFor: 1500 }))?.content || '';
+
+          if (firstContent.length < 100) return { products: [], businessInfo: '', pageUrl: page.url };
 
           const fullContent = await scrapeAllPages(page.url, firstContent);
-          console.log(`[SCRAPE] ${page.url}: ${Math.round(fullContent.length / 1000)}k chars across pages`);
+          console.log(`[SCRAPE] page=${page.url.split('/').slice(-2).join('/')} chars=${Math.round(fullContent.length / 1000)}k`);
           return extractFromContent(fullContent, page.category, page.url);
         }));
 
@@ -816,29 +782,55 @@ JSON: {"products":[...],"businessInfo":"..."}`;
           for (const product of r.value.products) {
             if (!product.name || product.name.length < 3) continue;
             const key = product.name.toLowerCase().trim();
-            if (allProducts.has(key)) continue; // dedup
-
-            const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-            const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : product.price || 0;
-            const st = [product.name, product.category, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
-
-            const item = {
-              PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
-              tenantId, productId, name: product.name, description: product.description || '',
-              price: product.price || 'Consultar', priceNum, category: product.category || '',
-              brand: product.brand || '', imageUrl: product.imageUrl || '', pageUrl: r.value.pageUrl,
-              sourceUrl: url, searchableText: st,
-              categoryNormalized: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
-              categoryParent: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
-              sizes: product.sizes || [],
-              outOfStockSizes: product.outOfStockSizes || [],
-              attributes: product.attributes || {},
-              createdAt: now,
-            };
-            await putItem(item);
-            allProducts.set(key, { name: product.name, price: product.price, category: product.category, imageUrl: product.imageUrl });
+            if (!allProducts.has(key)) {
+              allProducts.set(key, { ...product, _pageUrl: r.value.pageUrl });
+            }
           }
         }
+        console.log(`[SCRAPE] Progress: batch ${Math.ceil(i / 5) + 1}/${Math.ceil(pagesToScrape.length / 5)}, products so far: ${allProducts.size}`);
+      }
+
+      // PASO 5: Validar resultado antes de tocar la base de datos
+      const existingItems = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
+      const existingCount = existingItems.length;
+
+      if (allProducts.size === 0) {
+        console.warn(`[SCRAPE] 0 products found — aborting to preserve ${existingCount} existing products`);
+        return json({ productsCount: 0, pagesScanned: pagesToScrape.length, products: [], aborted: true, reason: 'empty_result' });
+      }
+
+      // PASO 6: Borrar productos viejos (DELETE real) y guardar nuevos
+      if (existingCount > 0) {
+        // Borrar en batches de 25 para no saturar DynamoDB
+        for (let i = 0; i < existingItems.length; i += 25) {
+          await Promise.all(existingItems.slice(i, i + 25).map(o => deleteItem({ PK: (o as any).PK, SK: (o as any).SK })));
+        }
+        console.log(`[SCRAPE] Deleted ${existingCount} old products`);
+      }
+
+      const productList: any[] = [];
+      for (const [key, product] of allProducts) {
+        const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : product.price || 0;
+        const st = [product.name, product.category, product.brand, product.description].filter(Boolean).join(' ').toLowerCase();
+        const item = {
+          PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
+          tenantId, productId,
+          name: product.name, description: product.description || '',
+          price: product.price || 'Consultar', priceNum,
+          category: product.category || '', brand: product.brand || '',
+          imageUrl: product.imageUrl || '', pageUrl: product._pageUrl || url,
+          sourceUrl: url, searchableText: st,
+          categoryNormalized: (product.category || '').toLowerCase().replace(/\s+/g, '_'),
+          sizes: product.sizes || [], outOfStockSizes: product.outOfStockSizes || [],
+          attributes: product.attributes || {}, createdAt: now,
+        };
+        productList.push(item);
+      }
+
+      // Guardar en batches de 25
+      for (let i = 0; i < productList.length; i += 25) {
+        await Promise.all(productList.slice(i, i + 25).map(item => putItem(item)));
       }
 
       if (businessInfo.trim()) {
@@ -852,12 +844,24 @@ JSON: {"products":[...],"businessInfo":"..."}`;
         }
       }
 
-      // Detect business type from scraped products
+      // businessInfo → agentConfig
+      if (businessInfo.trim()) {
+        const existing = await getItem(keys.agent(tenantId, 'main'));
+        if (existing) {
+          const cfg = existing.agentConfig || {};
+          if (!cfg.extraInstructions || cfg.extraInstructions.length < businessInfo.length) {
+            cfg.extraInstructions = businessInfo.slice(0, 2000);
+          }
+          await putItem({ ...existing, agentConfig: cfg, updatedAt: now });
+        }
+      }
+
+      // Detectar rubro del negocio
       try {
-        const productSample = Array.from(allProducts.values()).slice(0, 25).map(p => `${p.name}${p.category ? ` (${p.category})` : ''}`).join(', ');
+        const productSample = productList.slice(0, 25).map(p => `${p.name}${p.category ? ` (${p.category})` : ''}`).join(', ');
         const rubroRes = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001', max_tokens: 300,
-          messages: [{ role: 'user', content: `Productos de una tienda online: ${productSample}\n\nDevolvé JSON con: {"rubro": "rubro corto (ej: ropa deportiva, electrónica del hogar, suplementos deportivos)", "calificadores_sugeridos": ["dato1 que siempre hay que preguntar al cliente", "dato2"], "pregunta_apertura": "la pregunta más importante que el vendedor debería hacer al arrancar la conversación"}` }],
+          messages: [{ role: 'user', content: `Productos de una tienda online: ${productSample}\n\nDevolvé JSON: {"rubro": "rubro corto (ej: ropa deportiva, herramientas eléctricas)", "calificadores_sugeridos": ["dato1 a preguntar al cliente", "dato2"], "pregunta_apertura": "pregunta más importante para arrancar la conversación"}` }],
         });
         const rubroText = rubroRes.content[0].type === 'text' ? rubroRes.content[0].text : '{}';
         const rubroData = JSON.parse(rubroText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
@@ -865,42 +869,28 @@ JSON: {"products":[...],"businessInfo":"..."}`;
           const agentItem = await getItem(keys.agent(tenantId, 'main'));
           if (agentItem) {
             const bc = agentItem.businessConfig || {};
-            bc.business = {
-              ...(bc.business || {}),
-              rubro: rubroData.rubro,
-              calificadores_sugeridos: rubroData.calificadores_sugeridos || [],
-              pregunta_apertura_sugerida: rubroData.pregunta_apertura || '',
-            };
+            bc.business = { ...(bc.business || {}), rubro: rubroData.rubro, calificadores_sugeridos: rubroData.calificadores_sugeridos || [], pregunta_apertura_sugerida: rubroData.pregunta_apertura || '' };
             await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
           }
         }
-      } catch (err) {
-        console.error('[SCRAPE] rubro detection error:', err);
-      }
+      } catch (err) { console.error('[SCRAPE] rubro error:', err); }
 
-      // Generate extractor script and save scraper config
+      // Generar extractor para re-runs sin IA
       try {
         const samplePage = pagesToScrape[0];
-        const sampleMarkdown = (samplePage?.url === url ? mainPage.content : (await scrapePage(samplePage?.url || url))?.content) || mainPage.content;
-        const sampleProducts = Array.from(allProducts.values()).slice(0, 15);
-        const extractorCode = await generateExtractorCode(sampleMarkdown, sampleProducts);
+        const sampleMarkdown = (samplePage?.url === url ? mainPage.content : (await scrapePage(samplePage?.url || url, { waitFor: 1500 }))?.content) || mainPage.content;
+        const extractorCode = await generateExtractorCode(sampleMarkdown, productList.slice(0, 15));
         const existingCfg = await getItem(keys.scraperConfig(tenantId));
         await putItem({
-          ...(existingCfg || {}),
-          ...keys.scraperConfig(tenantId),
-          tenantId, baseUrl: url,
-          pages: pagesToScrape,
-          extractorCode,
+          ...(existingCfg || {}), ...keys.scraperConfig(tenantId),
+          tenantId, baseUrl: url, pages: pagesToScrape, extractorCode,
           schedule: (existingCfg as any)?.schedule || { enabled: false, timesPerDay: 1, hours: [9] },
-          lastRun: now,
-          createdAt: (existingCfg as any)?.createdAt || now,
-          updatedAt: now,
+          lastRun: now, createdAt: (existingCfg as any)?.createdAt || now, updatedAt: now,
         });
-      } catch (err) {
-        console.error('[SCRAPER] Failed to generate extractor code:', err);
-      }
+      } catch (err) { console.error('[SCRAPER] extractor error:', err); }
 
-      return json({ productsCount: allProducts.size, pagesScanned: pagesToScrape.length, products: Array.from(allProducts.values()).slice(0, 30), businessInfo: businessInfo.slice(0, 500) });
+      console.log(`[SCRAPE] Done: ${productList.length} products from ${pagesToScrape.length} pages`);
+      return json({ productsCount: productList.length, pagesScanned: pagesToScrape.length, products: productList.slice(0, 30).map(p => ({ name: p.name, price: p.price, category: p.category, imageUrl: p.imageUrl })), businessInfo: businessInfo.slice(0, 500) });
     } catch (err: any) {
       return error('Error: ' + err.message, 500);
     }

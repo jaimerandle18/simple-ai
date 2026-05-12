@@ -45,7 +45,7 @@ export async function googleSearchSite(siteUrl: string, maxResults = 30): Promis
 /**
  * Scrape a single URL with Firecrawl. Returns the page as markdown.
  */
-export async function scrapePage(url: string): Promise<{ url: string; content: string } | null> {
+export async function scrapePage(url: string, options?: { waitFor?: number }): Promise<{ url: string; content: string } | null> {
   if (!FIRECRAWL_API_KEY) return null;
 
   try {
@@ -55,7 +55,11 @@ export async function scrapePage(url: string): Promise<{ url: string; content: s
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${FIRECRAWL_API_KEY}`,
       },
-      body: JSON.stringify({ url, formats: ['markdown'] }),
+      body: JSON.stringify({
+        url,
+        formats: ['markdown'],
+        ...(options?.waitFor ? { waitFor: options.waitFor } : {}),
+      }),
     });
     const data: any = await res.json();
 
