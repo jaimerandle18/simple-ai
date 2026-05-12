@@ -6,6 +6,7 @@ import { redirect } from 'next/navigation';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { VerificationBanner } from '@/components/dashboard/VerificationBanner';
 import { RegressionPill } from '@/components/dashboard/RegressionPill';
+import { WhatsAppDisconnectAlert } from '@/components/dashboard/WhatsAppDisconnectAlert';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
@@ -47,6 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <div className="md:ml-64 h-full flex flex-col pt-14 md:pt-0">
         <VerificationBanner />
+        <WhatsAppDisconnectAlert />
         <main className="flex-1 overflow-auto">{children}</main>
       </div>
 
