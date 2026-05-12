@@ -178,7 +178,7 @@ export async function runScraper(tenantId: string): Promise<{ productsCount: num
 
 async function generateExtractorCode(sampleMarkdown: string, sampleProducts: any[]): Promise<string> {
   const res = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-opus-4-7',
     max_tokens: 2000,
     messages: [{
       role: 'user',
@@ -575,9 +575,9 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
       const mainPage = await scrapePage(url);
       if (!mainPage) return error('No se pudo acceder a la web.', 400);
 
-      // PASO 2: Haiku analiza la web y encuentra las URLs de categorías/productos
+      // PASO 2: Opus analiza la web y encuentra las URLs de categorías/productos
       const discoveryRes = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
+        model: 'claude-opus-4-7', max_tokens: 2000,
         system: `Analizas paginas web de tiendas online. Tu trabajo es encontrar TODAS las URLs de categorias o listados de productos.
 
 Busca en el contenido:
