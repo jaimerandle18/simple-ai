@@ -309,7 +309,11 @@ export default function ScraperPage() {
     setRunResult('');
     try {
       const result = await api('/agents/scrape/run', { method: 'POST', tenantId, body: {} });
-      setRunResult(`Completado: ${result.newCount} nuevos, ${result.updatedCount} actualizados`);
+      if (result.skipped) {
+        setRunResult(`Actualización salteada — el sitio devolvió muy pocos productos (${result.productsCount}). El catálogo anterior se conservó.`);
+      } else {
+        setRunResult(`Completado: ${result.newCount} nuevos, ${result.updatedCount} actualizados`);
+      }
     } catch (err: any) {
       setRunResult('Error: ' + err.message);
     }

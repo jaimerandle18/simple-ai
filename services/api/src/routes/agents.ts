@@ -147,6 +147,20 @@ export async function runScraper(tenantId: string): Promise<{ productsCount: num
     }
   }
 
+  // Safety check: if the re-run returns suspiciously few products compared to the
+  // existing catalog, skip the update to avoid wiping valid data due to a scrape failure.
+  const existingCount = existingMap.size;
+  if (allProducts.size === 0) {
+    console.warn(`[SCRAPER-RUN] tenant=${tenantId} returned 0 products — skipping update to preserve existing catalog (${existingCount} products).`);
+    await putItem({ ...(cfg as any), lastRunSkipped: now, lastRunSkipReason: 'empty_result' });
+    return { productsCount: 0, newCount: 0, updatedCount: 0, skipped: true } as any;
+  }
+  if (existingCount > 10 && allProducts.size < existingCount * 0.3) {
+    console.warn(`[SCRAPER-RUN] tenant=${tenantId} returned only ${allProducts.size}/${existingCount} products (<30%) — skipping update.`);
+    await putItem({ ...(cfg as any), lastRunSkipped: now, lastRunSkipReason: `low_yield_${allProducts.size}_of_${existingCount}` });
+    return { productsCount: allProducts.size, newCount: 0, updatedCount: 0, skipped: true } as any;
+  }
+
   let newCount = 0, updatedCount = 0;
   for (const [key, product] of allProducts) {
     const priceNum = typeof product.price === 'string' ? parseInt(product.price.replace(/[^0-9]/g, '')) || 0 : (product.price || 0);
