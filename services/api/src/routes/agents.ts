@@ -649,62 +649,95 @@ Construi URLs completas (no relativas).`,
       const old = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
       for (const o of old) await putItem({ ...(o as any), PK: 'DELETED', SK: (o as any).SK });
 
-      for (let i = 0; i < pagesToScrape.length; i += 3) {
-        const batch = pagesToScrape.slice(i, i + 3);
-        const results = await Promise.allSettled(batch.map(async (page) => {
-          // Scrapear la página (skip si es la main que ya tenemos)
-          let content = page.url === url ? mainPage.content : '';
-          if (!content) {
-            const scraped = await scrapePage(page.url);
-            content = scraped?.content || '';
+      // Scrape all pages of a category following pagination
+      const scrapeAllPages = async (baseUrl: string, firstContent: string): Promise<string> => {
+        const parts = [firstContent];
+        // Try ?page=N, ?paged=N, /page/N/ — the three most common Argentine e-commerce patterns
+        for (let pageNum = 2; pageNum <= 8; pageNum++) {
+          const candidates = [
+            baseUrl.includes('?') ? `${baseUrl}&page=${pageNum}` : `${baseUrl}?page=${pageNum}`,
+            baseUrl.replace(/\/?$/, `/page/${pageNum}/`),
+            baseUrl.includes('?') ? `${baseUrl}&paged=${pageNum}` : `${baseUrl}?paged=${pageNum}`,
+          ];
+          let found = false;
+          for (const candidate of candidates) {
+            try {
+              const scraped = await scrapePage(candidate);
+              if (!scraped || scraped.content.length < 400) continue;
+              // Stop if redirected back to page 1 (identical opening)
+              if (scraped.content.slice(0, 300) === firstContent.slice(0, 300)) break;
+              parts.push(scraped.content);
+              found = true;
+              break;
+            } catch {}
           }
-          if (content.length < 50) return { products: [], businessInfo: '', pageUrl: page.url };
+          if (!found) break;
+        }
+        return parts.join('\n\n---\n\n');
+      };
 
-          // Scrapear paginación (página 2)
-          let page2Content = '';
-          try {
-            const p2url = page.url.includes('?') ? page.url + '&page=2' : page.url + '?page=2';
-            const p2 = await scrapePage(p2url);
-            if (p2 && p2.content.length > 500) page2Content = p2.content;
-          } catch {}
-
-          const fullContent = content + (page2Content ? '\n\n--- PAGINA 2 ---\n\n' + page2Content : '');
-
-          const res = await anthropic.messages.create({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 4000,
-            system: `Extraé TODOS los productos de esta pagina web de un comercio argentino.
+      const EXTRACT_SYSTEM = (category: string) => `Extraé TODOS los productos de esta pagina web de un comercio argentino.
 
 Para CADA producto devolvé:
 - "name": nombre completo (marca + modelo si aplica)
 - "description": descripcion con specs (materiales, talles disponibles, colores, watts, capacidad, medidas, etc)
 - "price": precio EXACTO como aparece. Si no hay → "Consultar"
-- "category": "${page.category || 'detectar automaticamente'}"
-- "imageUrl": URL de la imagen (.jpg/.jpeg/.png/.webp). URL completa, no relativa
+- "category": "${category || 'detectar automaticamente'}"
+- "imageUrl": URL completa de la imagen (.jpg/.jpeg/.png/.webp)
 - "brand": marca si la hay
-- "sizes": array de talles disponibles si es ropa/calzado (ej: ["S","M","L","XL"])
+- "sizes": array de talles si es ropa/calzado
 - "outOfStockSizes": talles agotados si se indica
-- "attributes": objeto con specs tecnicas clave (ej: {"potencia_w": 800, "voltaje_v": 220})
+- "attributes": objeto con specs tecnicas clave
 
-REGLAS:
-- Solo productos REALES que se venden en la pagina
-- Precio exacto, NO inventar
-- Si hay variantes de un producto (colores, talles), listar como UN producto con sizes/colores en description
-- Incluir TODOS los productos, no solo los primeros
+REGLAS CRITICAS:
+- Incluir ABSOLUTAMENTE TODOS los productos, hasta el ultimo
+- Precio exacto tal como aparece, NO inventar
+- Si hay variantes (colores, talles), es UN producto con sizes en description
 - URLs de imagenes COMPLETAS (empiezan con http)
+- NO cortar la lista antes de terminar
 
-Tambien extraé info del negocio si la hay: envios, cambios, devoluciones, pagos, horarios, direccion, contacto.
+También extraé info del negocio (envios, cambios, pagos, horarios) si la hay.
 
-JSON: {"products":[...],"businessInfo":"..."}`,
-            messages: [{ role: 'user', content: fullContent.slice(0, 15000) }],
+JSON: {"products":[...],"businessInfo":"..."}`;
+
+      const extractFromContent = async (content: string, category: string, pageUrl: string) => {
+        const CHUNK = 28000;
+        const allProds: any[] = [];
+        let bizInfo = '';
+        // Split in chunks if content is very long
+        for (let offset = 0; offset < content.length; offset += CHUNK) {
+          const chunk = content.slice(offset, offset + CHUNK);
+          const res = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 8000,
+            system: EXTRACT_SYSTEM(category),
+            messages: [{ role: 'user', content: chunk }],
           });
           const text = res.content[0].type === 'text' ? res.content[0].text : '{}';
           try {
             const parsed = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-            return { products: parsed.products || [], businessInfo: parsed.businessInfo || '', pageUrl: page.url };
+            allProds.push(...(parsed.products || []));
+            if (parsed.businessInfo) bizInfo += parsed.businessInfo + ' ';
           } catch {
             const m = text.match(/\[[\s\S]*\]/);
-            return { products: m ? JSON.parse(m[0]) : [], businessInfo: '', pageUrl: page.url };
+            if (m) { try { allProds.push(...JSON.parse(m[0])); } catch {} }
           }
+        }
+        return { products: allProds, businessInfo: bizInfo.trim(), pageUrl };
+      };
+
+      for (let i = 0; i < pagesToScrape.length; i += 3) {
+        const batch = pagesToScrape.slice(i, i + 3);
+        const results = await Promise.allSettled(batch.map(async (page) => {
+          let firstContent = page.url === url ? mainPage.content : '';
+          if (!firstContent) {
+            const scraped = await scrapePage(page.url);
+            firstContent = scraped?.content || '';
+          }
+          if (firstContent.length < 50) return { products: [], businessInfo: '', pageUrl: page.url };
+
+          const fullContent = await scrapeAllPages(page.url, firstContent);
+          console.log(`[SCRAPE] ${page.url}: ${Math.round(fullContent.length / 1000)}k chars across pages`);
+          return extractFromContent(fullContent, page.category, page.url);
         }));
 
         for (const r of results) {
