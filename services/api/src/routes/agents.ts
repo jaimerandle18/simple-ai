@@ -622,7 +622,7 @@ Construi URLs completas (no relativas).`,
         pagesToScrape.push({ url, category: '' });
       }
 
-      for (const cat of (discovery.categories || []).slice(0, 30)) {
+      for (const cat of (discovery.categories || []).slice(0, 20)) {
         if (cat.url && cat.url.startsWith('http')) {
           pagesToScrape.push({ url: cat.url, category: cat.name || '' });
         }

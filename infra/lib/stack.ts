@@ -155,7 +155,7 @@ COMPOSE`,
         WAHA_API_KEY: wahaApiKey,
         STAGE: stage,
       },
-      timeout: cdk.Duration.seconds(120),
+      timeout: cdk.Duration.seconds(300),
       memorySize: 512,
     });
 
