@@ -224,7 +224,8 @@ COMPOSE`,
     });
     schedulerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
-      resources: [apiLambda.functionArn],
+      // Pattern avoids circular dependency with apiLambda
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-api-*`],
     }));
 
     // Allow the API Lambda to manage EventBridge Scheduler rules
@@ -234,7 +235,9 @@ COMPOSE`,
     }));
     apiLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
-      resources: [schedulerRole.roleArn],
+      // Pattern avoids circular dependency (schedulerRole → apiLambda → schedulerRole)
+      resources: [`arn:aws:iam::${this.account}:role/*`],
+      conditions: { StringEquals: { 'iam:PassedToService': 'scheduler.amazonaws.com' } },
     }));
 
     messageProcessorLambda.addEventSource(
@@ -264,7 +267,8 @@ COMPOSE`,
     });
 
     apiLambda.addEnvironment('API_BASE_URL', (httpApi.url ?? '').replace(/\/$/, ''));
-    apiLambda.addEnvironment('API_LAMBDA_ARN', apiLambda.functionArn);
+    // Construct ARN without referencing apiLambda.functionArn to avoid circular dependency
+    apiLambda.addEnvironment('API_LAMBDA_ARN', `arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-api-${stage}`);
     apiLambda.addEnvironment('SCHEDULER_ROLE_ARN', schedulerRole.roleArn);
 
     // ========== Outputs ==========
