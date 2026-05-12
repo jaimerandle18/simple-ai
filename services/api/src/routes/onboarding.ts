@@ -81,6 +81,7 @@ Tu trabajo es hacerle preguntas al dueño del negocio hasta tener TODA la info p
 - Sitio web
 - Redes sociales (Instagram, etc.)
 - Publico objetivo (edad, genero, estilo)
+- ESPECIALIDAD: Si el sistema detectó el rubro desde el catálogo, preguntá al dueño "¿En qué específicamente sos especialista dentro de ese rubro?" y "¿Qué datos necesitás siempre de un cliente para poder ayudarlo bien? (ej: para ropa → talle y color, para suplementos → objetivo y experiencia)". Guardá la respuesta como "calificadores" en business.
 
 ## 2. AGENTE IA(bot_persona)
 - Nombre del agente (sugerir uno si no se le ocurre)
@@ -251,9 +252,28 @@ function buildStateContext(config: any, completedSections: string[]): string {
   const current = getCurrentSection(completed);
   const pending = SECTION_ORDER.filter(s => !completed.includes(s) && s !== current);
 
+  const b = config.business || {};
+  const rubroDetectado = b.rubro;
+  const calificadoresSugeridos: string[] = b.calificadores_sugeridos || [];
+  const calificadoresYaGuardados = b.calificadores;
+  const preguntaApertura = b.pregunta_apertura_sugerida;
+
+  const rubroContext = rubroDetectado && !calificadoresYaGuardados ? `
+# RUBRO DETECTADO AUTOMATICAMENTE DEL CATÁLOGO
+Rubro: ${rubroDetectado}
+${calificadoresSugeridos.length > 0 ? `Calificadores sugeridos: ${calificadoresSugeridos.join(', ')}` : ''}
+${preguntaApertura ? `Pregunta apertura sugerida: "${preguntaApertura}"` : ''}
+
+INSTRUCCION: Cuando estés en la sección NEGOCIO, mencionale al dueño que detectaste que vende ${rubroDetectado} y preguntale:
+1. "En qué sos especialista dentro de ese rubro?" (ej: ropa oversize, electrónica de bajo consumo, suplementos para crossfit)
+2. "Para que el bot ayude bien a cada cliente, ¿qué datos necesitás siempre saber? Por ejemplo, para ${rubroDetectado} yo sugeriría preguntar: ${calificadoresSugeridos.join(', ')}. ¿Lo confirmás o cambiarías algo?"
+Guardá la respuesta en business.calificadores (array de strings).
+` : '';
+
   if (!current) {
     return `\n\n# ESTADO
 TODAS las secciones estan completas. Ofrece revisar el documento o cerrar el onboarding.
+${rubroContext}
 CONFIG: ${JSON.stringify(config, null, 2)}`;
   }
 
@@ -261,7 +281,7 @@ CONFIG: ${JSON.stringify(config, null, 2)}`;
 Secciones completas: ${completed.map(s => SECTION_LABELS[s]).join(', ') || 'ninguna'}
 SECCION ACTUAL: ${SECTION_LABELS[current]} (${current})
 Pendientes despues: ${pending.map(s => SECTION_LABELS[s]).join(', ') || 'ninguna'}
-
+${rubroContext}
 Trabaja SOLO en la seccion "${SECTION_LABELS[current]}". Cuando tengas los datos minimos, usa mark_section_complete("${current}") y pasa a la siguiente.
 NO vuelvas a preguntar sobre secciones ya completas.
 
@@ -585,8 +605,13 @@ function buildSystemPromptPreview(config: any, agentConfig: any): string {
   const web = b.sitio_web || b.web || '';
 
   let prompt = `Sos ${name}, vendedor virtual por WhatsApp de ${b.nombre || 'el negocio'}`;
-  if (b.rubro || b.tipo_productos) prompt += `, un negocio de ${b.rubro || b.tipo_productos}`;
+  if (b.rubro || b.tipo_productos) prompt += `, especializado en ${b.rubro || b.tipo_productos}`;
+  if (b.especialidad) prompt += ` (${b.especialidad})`;
   prompt += '.\n\n';
+
+  if (b.calificadores?.length > 0) {
+    prompt += `# CALIFICADORES — SIEMPRE PREGUNTAR\nAntes de recomendar productos, asegurate de saber: ${(b.calificadores as string[]).join(', ')}.\nSi el cliente no lo mencionó, preguntalo naturalmente antes de avanzar.\n\n`;
+  }
 
   // Tono
   prompt += '# TONO\n';
@@ -705,6 +730,9 @@ async function syncToAgentConfig(tenantId: string, config: any, _agent: any) {
   }
   if (config.promos_vigentes?.length) cfg.promotions = config.promos_vigentes.map((p: any) => p.texto).join('. ');
   const parts: string[] = [];
+  if (b.calificadores?.length > 0) {
+    parts.push(`CALIFICADORES — siempre preguntá antes de recomendar: ${(b.calificadores as string[]).join(', ')}.`);
+  }
   if (config.business?.descripcion_corta) parts.push(`Somos ${config.business.nombre || 'el negocio'}: ${config.business.descripcion_corta}`);
   if (config.business?.ubicacion) parts.push(`Ubicacion: ${config.business.ubicacion}`);
   // Volcar todas las secciones genéricamente (no depender de keys exactos de Haiku)

@@ -749,6 +749,32 @@ JSON: {"products":[...],"businessInfo":"..."}`,
         }
       }
 
+      // Detect business type from scraped products
+      try {
+        const productSample = Array.from(allProducts.values()).slice(0, 25).map(p => `${p.name}${p.category ? ` (${p.category})` : ''}`).join(', ');
+        const rubroRes = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+          messages: [{ role: 'user', content: `Productos de una tienda online: ${productSample}\n\nDevolvé JSON con: {"rubro": "rubro corto (ej: ropa deportiva, electrónica del hogar, suplementos deportivos)", "calificadores_sugeridos": ["dato1 que siempre hay que preguntar al cliente", "dato2"], "pregunta_apertura": "la pregunta más importante que el vendedor debería hacer al arrancar la conversación"}` }],
+        });
+        const rubroText = rubroRes.content[0].type === 'text' ? rubroRes.content[0].text : '{}';
+        const rubroData = JSON.parse(rubroText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+        if (rubroData.rubro) {
+          const agentItem = await getItem(keys.agent(tenantId, 'main'));
+          if (agentItem) {
+            const bc = agentItem.businessConfig || {};
+            bc.business = {
+              ...(bc.business || {}),
+              rubro: rubroData.rubro,
+              calificadores_sugeridos: rubroData.calificadores_sugeridos || [],
+              pregunta_apertura_sugerida: rubroData.pregunta_apertura || '',
+            };
+            await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
+          }
+        }
+      } catch (err) {
+        console.error('[SCRAPE] rubro detection error:', err);
+      }
+
       // Generate extractor script and save scraper config
       try {
         const samplePage = pagesToScrape[0];
