@@ -450,7 +450,7 @@ async function replayAndJudge(
 
   // Contexto para el juez: conversación entera + muestra del catálogo
   const convContext = allTurns.map((t: any) => `Cliente: ${t.userMessage}\nBot: ${t.botResponse}`).join('\n\n');
-  const catSample = catalog.slice(0, 15).map((p: any) => `${p.name} - ${p.price || 'sin precio'}`).join('\n');
+  const catSample = catalog.map((p: any) => p.name).join(', ');
 
   // Juzgar todos los turnos en paralelo (batches de 5)
   for (let batch = 0; batch < newResponses.length; batch += 5) {
