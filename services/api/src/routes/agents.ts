@@ -653,7 +653,7 @@ Construi URLs completas (no relativas).`,
       const scrapeAllPages = async (baseUrl: string, firstContent: string): Promise<string> => {
         const parts = [firstContent];
         // Try ?page=N, ?paged=N, /page/N/ — the three most common Argentine e-commerce patterns
-        for (let pageNum = 2; pageNum <= 8; pageNum++) {
+        for (let pageNum = 2; ; pageNum++) {
           const candidates = [
             baseUrl.includes('?') ? `${baseUrl}&page=${pageNum}` : `${baseUrl}?page=${pageNum}`,
             baseUrl.replace(/\/?$/, `/page/${pageNum}/`),
