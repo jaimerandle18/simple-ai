@@ -14,6 +14,7 @@ import {
 import { transcribeWhatsAppAudio, downloadWhatsAppMedia } from './lib/audio-transcriber';
 import { loadContactMemory, updateContactMemory } from './lib/contact-memory';
 import { logTurnMetrics } from './lib/ab-testing';
+import { CALCULADORA_TOOL, calcularMateriales } from './lib/calculadora-blockplas';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -329,6 +330,7 @@ async function generateResponse(
   imageData?: { base64: string; mimeType: string },
   complexity: MessageComplexity = 'new_query',
   historySummary?: string,
+  extraTools?: Anthropic.Tool[],
 ): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[] }> {
   const name = agentConfig.assistantName || 'el vendedor';
   const web = agentConfig.websiteUrl || '';
@@ -456,7 +458,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
       model,
       max_tokens: complexity === 'trivial' ? 200 : 500,
       system: systemPromptBlocks,
-      ...(maxRounds > 0 ? { tools: TOOLS } : {}),
+      ...(maxRounds > 0 ? { tools: [...TOOLS, ...(extraTools || [])] } : {}),
       messages,
     });
 
@@ -524,6 +526,15 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
             content: found.length > 0
               ? `Productos encontrados (i=id,n=nombre,m=marca,pr=precio,pd=display,s=specs,t=talles,d=desc):\n${formatProductsForPrompt(found)}`
               : `No encontré productos para "${input.query}". Categorías disponibles: ${categories}`,
+          });
+        } else if (toolUse.name === 'calcular_materiales') {
+          const input = toolUse.input as any;
+          console.log(`Tool call: calcular_materiales`, JSON.stringify(input).slice(0, 200));
+          const resultado = calcularMateriales(input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: resultado.resumen,
           });
         }
       }
@@ -983,10 +994,17 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
     const complexity: MessageComplexity = imageBase64 ? 'image' : trivial ? 'trivial' : followUp ? 'followup' : 'new_query';
 
+    // Tools extra por tenant (calculadora, etc)
+    const extraTools: Anthropic.Tool[] = [];
+    const hasCalc = agentCfg.enableCalculadora || catalog.some((p: any) =>
+      /ladrillo|bloque|block/i.test(p.name || '') || /ladrillo|bloque|block/i.test(p.category || '')
+    );
+    if (hasCalc) extraTools.push(CALCULADORA_TOOL);
+
     const { text: aiResponse, productsShown, freshProducts } = await generateResponse(
       combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
       imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
-      complexity, historySummary,
+      complexity, historySummary, extraTools,
     );
     recordSuccess();
 
