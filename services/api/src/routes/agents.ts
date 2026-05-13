@@ -1,7 +1,7 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, deleteItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
-import { crawlWebsite, scrapePage, mapSite } from '../lib/search';
+import { crawlWebsite, scrapePage, mapSite, fetchSitemapUrls, fetchProductDirect } from '../lib/search';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
@@ -278,7 +278,59 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
       scrapePage(url, { waitFor: 1500 }),
       mapSite(url, 500),
     ]);
-    if (!mainPage && siteUrls.length === 0) throw new Error('No se pudo acceder a la web.');
+    // Fallback: if Firecrawl gave us nothing, try sitemap + direct JSON-LD
+    if (!mainPage && siteUrls.length === 0) {
+      await setProgress('Buscando sitemap...');
+      const sitemapUrls = await fetchSitemapUrls(url);
+      if (sitemapUrls.length === 0) throw new Error('No se pudo acceder a la web.');
+
+      await setProgress(`Sitemap: ${sitemapUrls.length} productos encontrados, extrayendo datos...`);
+      console.log(`[SCRAPE] Sitemap fallback: ${sitemapUrls.length} URLs`);
+
+      const directProducts: any[] = [];
+      const BATCH = 10;
+      for (let i = 0; i < sitemapUrls.length; i += BATCH) {
+        const batch = sitemapUrls.slice(i, i + BATCH);
+        const results = await Promise.allSettled(batch.map(u => fetchProductDirect(u)));
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value?.name) directProducts.push(r.value);
+        }
+        if (i % 50 === 0 && i > 0) {
+          await setProgress(`Extrayendo productos: ${directProducts.length} de ~${sitemapUrls.length}...`);
+        }
+      }
+
+      if (directProducts.length === 0) throw new Error('No se encontraron productos en el sitio.');
+
+      const now = new Date().toISOString();
+      const existingItems = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 1500 });
+      if (existingItems.length > 0) {
+        for (let i = 0; i < existingItems.length; i += 25)
+          await Promise.all(existingItems.slice(i, i + 25).map((o: any) => deleteItem({ PK: o.PK, SK: o.SK })));
+      }
+
+      await setProgress('Guardando catálogo...');
+      const productList = directProducts.map(p => {
+        const productId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const st = [p.name, p.category, p.brand, p.description].filter(Boolean).join(' ').toLowerCase();
+        return {
+          PK: `TENANT#${tenantId}`, SK: `PRODUCT#${productId}`,
+          tenantId, productId, name: p.name, description: p.description || '',
+          price: p.price, priceNum: p.priceNum, category: p.category || '',
+          brand: p.brand || '', imageUrl: p.images?.[0] || '', images: p.images || [],
+          pageUrl: p.url, sourceUrl: url, searchableText: st,
+          categoryNormalized: (p.category || '').toLowerCase().replace(/\s+/g, '_'),
+          sizes: [], outOfStockSizes: [], attributes: {}, createdAt: now,
+        };
+      });
+      for (let i = 0; i < productList.length; i += 25)
+        await Promise.all(productList.slice(i, i + 25).map((item: any) => putItem(item)));
+
+      console.log(`[SCRAPE] Sitemap path done: ${productList.length} products`);
+      await putItem({ ...keys.scraperJob(tenantId), tenantId, url, status: 'done', productsCount: productList.length, pagesScanned: sitemapUrls.length, progress: `${productList.length} productos relevados`, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return;
+    }
+
     console.log(`[SCRAPE] Site map: ${siteUrls.length} URLs`);
 
     const baseHostname = new URL(url).hostname;

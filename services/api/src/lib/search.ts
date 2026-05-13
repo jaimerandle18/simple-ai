@@ -201,6 +201,124 @@ export async function crawlWebsite(url: string): Promise<{ url: string; content:
   }
 }
 
+const PRODUCT_PATH_PREFIXES = ['/productos/', '/products/', '/product/', '/p/', '/catalogo/', '/tienda/', '/shop/', '/item/'];
+
+async function _parseSitemapXml(xml: string, depth = 0): Promise<string[]> {
+  if (depth > 3) return [];
+  const urls: string[] = [];
+  const isSitemapIndex = xml.includes('<sitemapindex');
+  const locRegex = /<loc[^>]*>\s*([^<]+)\s*<\/loc>/gi;
+  let m: RegExpExecArray | null;
+  const locs: string[] = [];
+  while ((m = locRegex.exec(xml)) !== null) locs.push(m[1].trim());
+
+  if (isSitemapIndex) {
+    const results = await Promise.allSettled(locs.map(async loc => {
+      try {
+        const r = await fetch(loc, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) return [];
+        return _parseSitemapXml(await r.text(), depth + 1);
+      } catch { return []; }
+    }));
+    for (const r of results) if (r.status === 'fulfilled') urls.push(...r.value);
+  } else {
+    for (const loc of locs) {
+      try {
+        const path = new URL(loc).pathname.replace(/\/$/, '');
+        if (PRODUCT_PATH_PREFIXES.some(p => path.startsWith(p.replace(/\/$/, '')))) urls.push(loc);
+      } catch {}
+    }
+  }
+  return urls;
+}
+
+export async function fetchSitemapUrls(baseUrl: string): Promise<string[]> {
+  const base = baseUrl.replace(/\/$/, '');
+  const candidates = [`${base}/sitemap.xml`, `${base}/sitemap_index.xml`];
+  for (const sitemapUrl of candidates) {
+    try {
+      const r = await fetch(sitemapUrl, { signal: AbortSignal.timeout(15000) });
+      if (!r.ok) continue;
+      const urls = await _parseSitemapXml(await r.text());
+      if (urls.length > 0) {
+        console.log(`[SITEMAP] ${urls.length} product URLs from ${sitemapUrl}`);
+        return urls;
+      }
+    } catch {}
+  }
+  return [];
+}
+
+export interface DirectProduct {
+  name: string;
+  price: string;
+  priceNum: number;
+  images: string[];
+  description: string;
+  brand?: string;
+  sku?: string;
+  inStock?: boolean | null;
+  url: string;
+  category: string;
+}
+
+function _findProductLd(data: any): any | null {
+  if (Array.isArray(data)) { for (const d of data) { const f = _findProductLd(d); if (f) return f; } return null; }
+  if (!data || typeof data !== 'object') return null;
+  if (data['@type'] === 'Product') return data;
+  for (const v of Object.values(data)) { if (v && typeof v === 'object') { const f = _findProductLd(v); if (f) return f; } }
+  return null;
+}
+
+export async function fetchProductDirect(url: string): Promise<DirectProduct | null> {
+  try {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProductBot/1.0)', 'Accept-Language': 'es-AR,es;q=0.9' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+
+    const scriptRe = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = scriptRe.exec(html)) !== null) {
+      try {
+        const ld = _findProductLd(JSON.parse(m[1]));
+        if (!ld) continue;
+        const offers = Array.isArray(ld.offers) ? ld.offers[0] : (ld.offers || {});
+        const rawPrice = offers?.price;
+        const priceNum = rawPrice ? Math.round(parseFloat(String(rawPrice).replace(/[^\d.]/g, ''))) || 0 : 0;
+        const images: string[] = [];
+        const imgField = ld.image;
+        if (typeof imgField === 'string' && imgField.startsWith('http')) images.push(imgField);
+        else if (Array.isArray(imgField)) for (const img of imgField) {
+          const src = typeof img === 'string' ? img : (img?.url || img?.contentUrl || '');
+          if (src.startsWith('http')) images.push(src);
+        }
+        const availability = offers?.availability || '';
+        const inStock = availability ? availability.includes('InStock') : null;
+        const brand = ld.brand?.name || ld.brand || undefined;
+        const slug = url.replace(/\/$/, '').split('/').pop() || '';
+        const pathParts = new URL(url).pathname.replace(/^\//, '').split('/');
+        const category = pathParts.length >= 2 ? pathParts[pathParts.length - 2].replace(/-/g, ' ') : '';
+        return {
+          name: String(ld.name || '').trim(),
+          price: priceNum > 0 ? String(priceNum) : 'Consultar',
+          priceNum,
+          images,
+          description: String(ld.description || '').trim().slice(0, 500),
+          brand: brand ? String(brand) : undefined,
+          sku: ld.sku || slug,
+          inStock,
+          url,
+          category,
+        };
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 /**
  * Search stored products by keyword matching.
  * Simple but effective — matches query words against product name/description.
