@@ -855,7 +855,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
             } else {
               toolResults.push({
                 type: 'tool_result', tool_use_id: toolUse.id,
-                content: `Link de compra generado. Mandalo al cliente asi:\n\nTu carrito 🛒 → ${checkoutUrl}\n\nResumen: ${addedCount} productos, total $${total.toLocaleString('es-AR')}. Decile que toque el link, ya esta todo cargado, solo confirma y paga.${failMsg}`,
+                content: `Link de compra generado. Mandalo al cliente:\n${checkoutUrl}\n\nResumen: ${addedCount} productos, total $${total.toLocaleString('es-AR')}. Decile que toque el link, ya esta todo cargado, solo confirma y paga.${failMsg}`,
               });
             }
           }
@@ -1461,7 +1461,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
             }
             break;
           case 'link':
-            if (captionCfg.caption_show_link && p.pageUrl) lines.push(`Ver mas → ${p.pageUrl}`);
+            if (captionCfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
             break;
         }
       }
