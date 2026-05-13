@@ -249,6 +249,30 @@ const ASKING_PHOTO_PATTERNS = [
   /te mando.{0,10}foto/i,
 ];
 
+// Extraer talle del mensaje del cliente
+function extractSizeFromMessage(message: string): string | undefined {
+  const lower = message.toLowerCase();
+  const letterSizes = ['xxxl', 'xxl', 'xl', 'xs', 's', 'm', 'l'];
+  for (const size of letterSizes) {
+    const regex = new RegExp(`\\b(talle\\s+)?${size}\\b`, 'i');
+    if (regex.test(lower)) return size.toUpperCase();
+  }
+  const numMatch = message.match(/talle\s+(\d{2})/i) || message.match(/\b(\d{2})\b/);
+  if (numMatch) return numMatch[1];
+  return undefined;
+}
+
+// Verificar si un talle esta disponible para un producto
+function isVariantAvailable(product: any, size: string): boolean | undefined {
+  const sizes: string[] = product.sizes || [];
+  const outOfStock: string[] = product.outOfStockSizes || [];
+  if (sizes.length === 0 && outOfStock.length === 0) return undefined;
+  const sizeUpper = size.toUpperCase();
+  if (outOfStock.some((s: string) => s.toUpperCase() === sizeUpper)) return false;
+  if (sizes.some((s: string) => s.toUpperCase() === sizeUpper)) return true;
+  return undefined;
+}
+
 // Calcular palabras REALMENTE únicas de un producto vs el resto del contexto
 function getDistinctiveWords(product: EnrichedProduct, allProducts: EnrichedProduct[]): string[] {
   const stopWords = new Set([
@@ -393,17 +417,19 @@ async function generateResponse(
 3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
 4. Precio formateado: $XX.XXX (ej: $67.186)
 5. FORMATO DE VENTA — PASO A PASO:
-   a) Cuando el cliente pide una CATEGORIA amplia ("busco bermuda", "quiero remera"), NO muestres productos todavia. Primero pregunta 1-2 cosas para filtrar: estilo (cargo, clasica, slim), color, talle, uso. Ej: "Tengo varias bermudas! Buscas algo mas clasico o estilo cargo? Y que talle usas?"
-   b) Una vez que tenes al menos 1 filtro, mostra MAXIMO 3 productos que matcheen. NOMBRA los productos en el texto (para que se envien las fotos) sin repetir precio ni descripcion. Ej: "Con eso te van la Bermuda Cardiff, la Bermuda Napp y la Bermuda Pocket. Fijate cual te copa!"
+   a) Cuando el cliente pide una CATEGORIA amplia ("busco bermuda", "quiero remera"), NO muestres productos todavia. Primero pregunta 1-2 cosas para filtrar: estilo, color, talle, uso.
+   b) Una vez que tenes al menos 1 filtro, mostra MAXIMO 3 productos. NOMBRA los productos en el texto para que se envien las fotos. NO repitas precio ni descripcion (ya van en el caption de la foto). Maximo 3 lineas: intro + nombres + pregunta.
    c) Si el cliente quiere ver mas, mostra otros 3 distintos.
-   d) SIEMPRE menciona los nombres de los productos en el texto para que las fotos se envien.
+   d) SIEMPRE menciona los nombres de los productos en el texto.
+   e) EJEMPLOS CORRECTOS: "Te paso la Bermuda Cardiff, la Napp y la Pocket. Cual te copa?" o "Mira estas 3. Mas oscuro o mas claro?"
+   f) EJEMPLOS INCORRECTOS: "La Cardiff $55.000 es de gabardina, la Napp $48.000..." (repite info del caption).
 6. USO DE buscar_productos: solo si el cliente pide categoría o producto NUEVO no presente en PRODUCTOS_DISPONIBLES. Query con palabras clave, NO frases.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
 9. ENVÍOS, PAGOS, HORARIOS, UBICACIÓN: respondé con lo que sepas. Si no tenés el dato exacto, derivá.
 10. INTENCIÓN DE COMPRA: si el cliente quiere comprar, pedile los datos necesarios.
 11. ESCALAMIENTO: si insulta o pide humano: "Te paso con alguien del equipo."
-12. FORMATO 1 PRODUCTO: si el cliente eligio un producto especifico, podes dar detalles en el texto (specs, talles, etc). La foto y el texto se complementan, no se repiten. NO repitas nombre+precio si ya va en la foto.
+12. FORMATO 1 PRODUCTO: si el cliente eligio un producto especifico, da detalles en el texto (material, talles disponibles, por que lo recomendas). La foto ya muestra nombre+precio en el caption, NO lo repitas en el texto. Complementa, no dupliques.
 13. NUNCA preguntes "¿te mando foto?". O nombrás el producto con datos o no lo nombrás.
 14. IMAGENES DEL CLIENTE: si manda una foto, analizala y buscá productos similares con buscar_productos.
 15. PRODUCTOS YA MOSTRADOS: referenciá natural: "la que te mostré", "esa misma". No re-introduzcas productos ya vistos.
@@ -1334,31 +1360,39 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       if (imagesToSend.length >= 3) break;
     }
 
-    // Build caption from onboarding config (or fallback to default)
+    // Build caption from onboarding config + size context
     const captionCfg = (agent as any)?.onboardingV2 || {};
-    const captionOrder: string[] = captionCfg.caption_order || ['price', 'brand', 'category', 'description', 'sizes', 'link'];
+    const askedSize = extractSizeFromMessage(combinedMessage);
+    const captionOrder: string[] = captionCfg.caption_order || ['price'];
+
     const buildProductCaption = (p: any): string => {
       const bold = adapter.supportsMarkdown() ? `*${p.name}*` : p.name;
       const lines: string[] = [bold];
+
+      // Price line with optional size availability
+      let priceLine = '';
+      if (captionCfg.caption_show_price !== false && p.priceNum) {
+        priceLine = `$${Number(p.priceNum).toLocaleString('es-AR')}`;
+      }
+      if (askedSize) {
+        const avail = isVariantAvailable(p, askedSize);
+        if (avail === true) priceLine += (priceLine ? ' · ' : '') + `${askedSize} disponible`;
+        else if (avail === false) priceLine += (priceLine ? ' · ' : '') + `${askedSize} agotado`;
+      }
+      if (priceLine) lines.push(priceLine);
+
+      // Additional fields from onboarding config
       for (const key of captionOrder) {
+        if (key === 'price') continue; // already handled above
         switch (key) {
-          case 'price':
-            if (captionCfg.caption_show_price !== false && p.priceNum) lines.push(`$${Number(p.priceNum).toLocaleString('es-AR')}`);
-            break;
           case 'brand':
             if (captionCfg.caption_show_brand && p.brand) lines.push(p.brand);
-            break;
-          case 'category':
-            if (captionCfg.caption_show_category && p.category) lines.push(p.category);
             break;
           case 'description':
             if (captionCfg.caption_show_description && p.description) {
               const dot = p.description.indexOf('.');
               lines.push(dot > 0 ? p.description.slice(0, dot + 1) : p.description.slice(0, 120));
             }
-            break;
-          case 'sizes':
-            if (captionCfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
             break;
           case 'link':
             if (captionCfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
