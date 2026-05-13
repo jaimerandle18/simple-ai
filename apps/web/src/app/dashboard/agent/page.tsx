@@ -222,6 +222,7 @@ export default function ScraperPage() {
   const [scrapeProgress, setScrapeProgress] = useState('');
   const [scrapeFinishedCount, setScrapeFinishedCount] = useState<number | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
+  const [catalogVersion, setCatalogVersion] = useState(0);
   const closeCatalog = useCallback(() => setShowCatalog(false), []);
 
   useEffect(() => {
@@ -282,6 +283,7 @@ export default function ScraperPage() {
             setScrapeFinishedCount(status.productsCount);
             setConfig(prev => ({ ...prev, websiteScraped: true, productsCount: status.productsCount }));
             setScrapeResult(`Se encontraron ${status.productsCount} productos`);
+            setCatalogVersion(v => v + 1);
             const scheduleData = await api('/agents/scrape/schedule', { tenantId });
             setSchedule(scheduleData);
           } else if (status.status === 'error') {
@@ -306,6 +308,7 @@ export default function ScraperPage() {
         setRunResult(`Actualización salteada — el sitio devolvió muy pocos productos (${result.productsCount}). El catálogo anterior se conservó.`);
       } else {
         setRunResult(`Completado: ${result.newCount} nuevos, ${result.updatedCount} actualizados`);
+        setCatalogVersion(v => v + 1);
       }
     } catch (err: any) {
       setRunResult('Error: ' + err.message);
@@ -638,7 +641,7 @@ export default function ScraperPage() {
       </div>
 
       {showCatalog && tenantId && (
-        <CatalogModal tenantId={tenantId} onClose={closeCatalog} />
+        <CatalogModal key={catalogVersion} tenantId={tenantId} onClose={closeCatalog} />
       )}
     </div>
   );
