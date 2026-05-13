@@ -523,6 +523,7 @@ export default function OnboardingPage() {
             <CaptionSection
               config={config}
               setValue={setValue}
+              applyValue={applyValue}
               sampleProducts={sampleProducts}
               availableFields={availableCaptionFields}
               aiLoading={aiLoading}
@@ -709,9 +710,10 @@ const CAPTION_ITEMS = [
   { key: 'link', label: 'Link al producto', configId: 'caption_show_link' },
 ];
 
-function CaptionSection({ config, setValue, sampleProducts, availableFields, aiLoading, aiResult, improveField, acceptImprovement, dismissAi, errors, tenantId }: {
+function CaptionSection({ config, setValue, applyValue, sampleProducts, availableFields, aiLoading, aiResult, improveField, acceptImprovement, dismissAi, errors, tenantId }: {
   config: Record<string, any>;
   setValue: (id: string, v: any) => void;
+  applyValue: (id: string, v: any) => void;
   sampleProducts: Record<string, any>[];
   availableFields: Set<string>;
   aiLoading: string | null;
@@ -739,7 +741,7 @@ function CaptionSection({ config, setValue, sampleProducts, availableFields, aiL
 
   const orderedItems = order.map(k => visibleItems.find(v => v.key === k)!).filter(Boolean);
 
-  // Drag handlers
+  // Drag handlers — reorder locally during drag, save on drop (skip confirmation modal)
   const handleDragStart = (idx: number) => setDragIdx(idx);
   const handleDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault();
@@ -747,7 +749,8 @@ function CaptionSection({ config, setValue, sampleProducts, availableFields, aiL
     const newOrder = [...order];
     const [moved] = newOrder.splice(dragIdx, 1);
     newOrder.splice(idx, 0, moved);
-    setValue('caption_order', newOrder);
+    // Use applyValue to skip confirmation modal for drag reorder
+    applyValue('caption_order', newOrder);
     setDragIdx(idx);
   };
   const handleDragEnd = () => setDragIdx(null);
