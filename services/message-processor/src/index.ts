@@ -1409,14 +1409,33 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     );
     recordSuccess();
 
-    // Parse INTRO/CIERRE structure
+    // Parse INTRO/CIERRE structure (explicit tags OR auto-split on last question)
+    const fullFormatted = formatOutbound(aiResponse, channel);
+    let introText = '';
+    let cierreText = '';
+    let hasStructure = false;
+
+    // Try explicit INTRO/CIERRE tags first
     const introMatch = aiResponse.match(/INTRO:\s*([\s\S]*?)(?=CIERRE:|$)/i);
     const cierreMatch = aiResponse.match(/CIERRE:\s*([\s\S]*?)$/i);
-    const hasStructure = !!(introMatch && cierreMatch && introMatch[1].trim() && cierreMatch[1].trim());
-    const introText = hasStructure ? formatOutbound(introMatch![1].trim(), channel) : '';
-    const cierreText = hasStructure ? formatOutbound(cierreMatch![1].trim(), channel) : '';
-    const cleanResponse = hasStructure ? `${introText}\n\n${cierreText}` : formatOutbound(aiResponse, channel);
-    // For photo filter, use the full text (intro has the product names)
+    if (introMatch && cierreMatch && introMatch[1].trim() && cierreMatch[1].trim()) {
+      introText = formatOutbound(introMatch[1].trim(), channel);
+      cierreText = formatOutbound(cierreMatch[1].trim(), channel);
+      hasStructure = true;
+    }
+
+    // Auto-split: if text ends with a question and there will be photos, split last line as cierre
+    if (!hasStructure) {
+      const lines = fullFormatted.split('\n').filter(l => l.trim());
+      const lastLine = lines[lines.length - 1]?.trim() || '';
+      if (lines.length >= 2 && /\?$/.test(lastLine)) {
+        introText = lines.slice(0, -1).join('\n');
+        cierreText = lastLine;
+        hasStructure = true;
+      }
+    }
+
+    const cleanResponse = hasStructure ? `${introText}\n\n${cierreText}` : fullFormatted;
     const filterText = hasStructure ? introText : cleanResponse;
 
     console.log(`[FORMAT] hasStructure=${hasStructure}${hasStructure ? ` intro="${introText.slice(0, 80)}" cierre="${cierreText.slice(0, 80)}"` : ''}`);
@@ -1476,7 +1495,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
             }
             break;
           case 'sizes':
-            if (captionCfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
+            if (captionCfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${[...new Set(p.sizes)].join(', ')}`);
             break;
           case 'link':
             if (captionCfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
