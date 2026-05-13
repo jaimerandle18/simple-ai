@@ -44,6 +44,30 @@ const TOOLS: Anthropic.Tool[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'agregar_al_carrito',
+    description: 'Agrega un producto al carrito del cliente. Usala cuando el cliente dice que quiere un producto, "lo quiero", "agregame ese", "me lo llevo", etc. Necesitas el nombre exacto del producto y opcionalmente talle y color.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        producto: { type: 'string', description: 'Nombre exacto del producto (como aparece en PRODUCTOS_DISPONIBLES)' },
+        talle: { type: 'string', description: 'Talle elegido (S, M, L, XL, etc.). Si no eligió, preguntar antes.' },
+        color: { type: 'string', description: 'Color elegido. Si no eligió y hay opciones, preguntar antes.' },
+        cantidad: { type: 'number', description: 'Cantidad (default 1)' },
+      },
+      required: ['producto'],
+    },
+  },
+  {
+    name: 'ver_carrito',
+    description: 'Muestra el carrito actual del cliente con todos los productos agregados, precios y total. Usala cuando el cliente pregunte "qué tengo en el carrito", "cuánto es", "qué llevo".',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'generar_link_compra',
+    description: 'Genera un link para que el cliente complete la compra en la web con todos los productos del carrito ya cargados. Usala cuando el cliente dice "listo", "quiero pagar", "quiero comprar", "paso a comprar".',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
 ];
 
 // ============================================================
@@ -315,9 +339,9 @@ function chooseModel(complexity: MessageComplexity): string {
 
 function chooseMaxRounds(complexity: MessageComplexity): number {
   if (complexity === 'trivial') return 0;     // sin tools
-  if (complexity === 'followup') return 1;    // máx 1 tool call
+  if (complexity === 'followup') return 2;    // puede necesitar agregar al carrito
   if (complexity === 'image') return 3;       // puede necesitar buscar
-  return 2;                                   // new_query
+  return 4;                                   // new_query (carrito puede necesitar varias rondas)
 }
 
 async function generateResponse(
@@ -331,7 +355,9 @@ async function generateResponse(
   complexity: MessageComplexity = 'new_query',
   historySummary?: string,
   extraTools?: Anthropic.Tool[],
-): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[] }> {
+  cart?: any[],
+): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[]; cart?: any[] }> {
+  const _cart: any[] = cart || [];
   const name = agentConfig.assistantName || 'el vendedor';
   const web = agentConfig.websiteUrl || '';
 
@@ -348,8 +374,12 @@ async function generateResponse(
     ? `\n# PRODUCTOS_DISPONIBLES (formato compacto)\ni=id, n=nombre, m=marca, c=categoría, pr=precio numérico, pd=precio display, s=specs, t=talles disponibles, ta=talles agotados, d=descripción\n${formatProductsForPrompt(allContextProducts)}`
     : '\n# PRODUCTOS_DISPONIBLES\n(ninguno en contexto, usá buscar_productos para encontrar)';
 
+  const cartBlock = _cart.length > 0
+    ? `\n# CARRITO ACTUAL DEL CLIENTE\n${_cart.map((i, idx) => `${idx + 1}. ${i.productName}${i.talle ? ` (${i.talle})` : ''}${i.color ? ` - ${i.color}` : ''} x${i.cantidad} — $${(i.price * i.cantidad).toLocaleString('es-AR')}`).join('\n')}\nTotal: $${_cart.reduce((s, i) => s + i.price * i.cantidad, 0).toLocaleString('es-AR')}`
+    : '';
+
   const HARDCODED_RULES = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes productos ni precios.
-2. NUNCA mandes al cliente a la web. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos.
+2. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos. Solo mandá links de compra usando generar_link_compra, nunca inventes URLs.
 3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
 4. Precio formateado: $XX.XXX (ej: $67.186)
 5. Las fotos se envían AUTOMÁTICAMENTE. NO listes productos uno por uno con sus datos. Hacé una intro corta + dato clave + pregunta.
@@ -363,7 +393,9 @@ async function generateResponse(
 13. NUNCA preguntes "¿te mando foto?". O nombrás el producto con datos o no lo nombrás.
 14. IMAGENES DEL CLIENTE: si manda una foto, analizala y buscá productos similares con buscar_productos.
 15. PRODUCTOS YA MOSTRADOS: referenciá natural: "la que te mostré", "esa misma". No re-introduzcas productos ya vistos.
-16. INFO DEL NEGOCIO: si hay secciones de INFORMACION_NEGOCIO o PAGINAS_DEL_SITIO, usá esos datos para responder preguntas sobre envíos, pagos, cambios, horarios, ubicación. NO digas "no tengo esa info" si está disponible.`;
+16. INFO DEL NEGOCIO: si hay secciones de INFORMACION_NEGOCIO o PAGINAS_DEL_SITIO, usá esos datos para responder preguntas sobre envíos, pagos, cambios, horarios, ubicación. NO digas "no tengo esa info" si está disponible.
+17. CARRITO: cuando el cliente quiere un producto, usá agregar_al_carrito. Siempre pedí talle y color ANTES de agregar si hay opciones.
+18. LINK DE COMPRA: cuando el cliente dice "listo", "quiero comprar", "paso a comprar", "cerramos", SIEMPRE llamá generar_link_compra. NUNCA escribas una URL vos — SOLO usá el link que devuelve la tool. NUNCA inventes URLs como /checkout o /comprar.`;
 
   const activeRules = agentConfig.extraInstructions || HARDCODED_RULES;
 
@@ -403,7 +435,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
   const summaryBlock = historySummary
     ? `\n# RESUMEN DE CONVERSACIÓN PREVIA\n${historySummary}`
     : '';
-  const volatileBlock = memoryBlock + summaryBlock + sitePagesBlock + productsBlock;
+  const volatileBlock = memoryBlock + summaryBlock + sitePagesBlock + productsBlock + cartBlock;
 
   // System prompt como array con cache_control para Anthropic
   const systemPromptBlocks: Anthropic.TextBlockParam[] = [
@@ -477,7 +509,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
       const textBlock = res.content.find(b => b.type === 'text');
       return {
         text: textBlock ? textBlock.text : 'Disculpá, tuve un problema. ¿Podés repetirme?',
-        productsShown: allProductsShown, freshProducts,
+        productsShown: allProductsShown, freshProducts, cart: _cart,
       };
     }
 
@@ -506,7 +538,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
         const textBlock = finalRes.content.find(b => b.type === 'text');
         return {
           text: textBlock ? textBlock.text : 'Disculpá, tuve un problema. ¿Podés repetirme?',
-          productsShown: allProductsShown, freshProducts,
+          productsShown: allProductsShown, freshProducts, cart: _cart,
         };
       }
 
@@ -540,6 +572,92 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
             tool_use_id: toolUse.id,
             content: resultado.resumen,
           });
+        } else if (toolUse.name === 'agregar_al_carrito') {
+          const input = toolUse.input as { producto: string; talle?: string; color?: string; cantidad?: number };
+          console.log(`Tool call: agregar_al_carrito("${input.producto}", talle=${input.talle}, color=${input.color})`);
+
+          // Find product in catalog
+          const nameNorm = input.producto.toLowerCase().trim();
+          const product = catalog.find(p => p.name.toLowerCase().trim() === nameNorm)
+            || catalog.find(p => p.name.toLowerCase().includes(nameNorm) || nameNorm.includes(p.name.toLowerCase()));
+
+          if (!product) {
+            toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: `No encontré "${input.producto}" en el catálogo. Buscá con buscar_productos primero.` });
+          } else {
+            // Find matching variant by talle/color
+            const variants = (product as any).variants || [];
+            let matchedVariant: any = null;
+            if (variants.length > 0 && (input.talle || input.color)) {
+              matchedVariant = variants.find((v: any) => {
+                const talleMatch = !input.talle || v.option1?.toUpperCase() === input.talle.toUpperCase();
+                const colorMatch = !input.color || v.option0?.toUpperCase() === input.color.toUpperCase();
+                return talleMatch && colorMatch && v.available;
+              });
+              if (!matchedVariant && input.talle) {
+                // Talle not available
+                const available = variants.filter((v: any) => v.available && v.option1).map((v: any) => v.option1);
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: `El talle ${input.talle} no está disponible para ${product.name}. Talles disponibles: ${available.join(', ') || 'sin stock'}` });
+                continue;
+              }
+            } else if (variants.length > 0 && !input.talle) {
+              // Need talle selection
+              const talles = [...new Set(variants.filter((v: any) => v.available && v.option1).map((v: any) => v.option1))];
+              if (talles.length > 0) {
+                toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: `Para agregar ${product.name} al carrito, necesito saber el talle. Disponibles: ${talles.join(', ')}` });
+                continue;
+              }
+            }
+
+            // Add to cart in convState
+            const cartItem = {
+              productName: product.name,
+              productId: (product as any).productId,
+              price: product.priceNum || 0,
+              talle: input.talle || matchedVariant?.option1 || '',
+              color: input.color || matchedVariant?.option0 || '',
+              cantidad: input.cantidad || 1,
+              sku: matchedVariant?.sku || (product as any).sku || '',
+              variantId: matchedVariant?.variantId || null,
+              imageUrl: product.imageUrl || '',
+              pageUrl: (product as any).pageUrl || '',
+            };
+
+            _cart.push(cartItem);
+
+            const total = _cart.reduce((s: number, i: any) => s + i.price * i.cantidad, 0);
+            toolResults.push({
+              type: 'tool_result', tool_use_id: toolUse.id,
+              content: `Agregado al carrito: ${product.name}${cartItem.talle ? ` (${cartItem.talle})` : ''}${cartItem.color ? ` - ${cartItem.color}` : ''} x${cartItem.cantidad} — $${cartItem.price.toLocaleString('es-AR')}\nCarrito: ${_cart.length} items, total $${total.toLocaleString('es-AR')}`,
+            });
+          }
+        } else if (toolUse.name === 'ver_carrito') {
+          const cart = _cart;
+          if (cart.length === 0) {
+            toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: 'El carrito está vacío. El cliente todavía no agregó nada.' });
+          } else {
+            const lines = cart.map((i: any, idx: number) => `${idx + 1}. ${i.productName}${i.talle ? ` (${i.talle})` : ''}${i.color ? ` - ${i.color}` : ''} x${i.cantidad} — $${(i.price * i.cantidad).toLocaleString('es-AR')}`);
+            const total = cart.reduce((s: number, i: any) => s + i.price * i.cantidad, 0);
+            lines.push(`\nTotal: $${total.toLocaleString('es-AR')}`);
+            toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: `Carrito del cliente:\n${lines.join('\n')}` });
+          }
+        } else if (toolUse.name === 'generar_link_compra') {
+          const cart = _cart;
+          if (cart.length === 0) {
+            toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: 'El carrito está vacío. Primero el cliente tiene que elegir productos.' });
+          } else {
+            // Build Tiendanube cart URL: /comprar?sku=X&sku=Y
+            // This adds items to the CLIENT's cart in their browser and shows the cart page
+            const baseUrl = ((catalog[0] as any)?.sourceUrl || (catalog[0] as any)?.pageUrl?.replace(/\/productos\/.*/, '') || '').replace(/\/$/, '');
+            const skus = cart.filter((i: any) => i.sku).map((i: any) => `sku=${encodeURIComponent(i.sku)}`);
+            const checkoutUrl = skus.length > 0
+              ? `${baseUrl}/comprar?${skus.join('&')}`
+              : `${baseUrl}/comprar`;
+            const total = cart.reduce((s: number, i: any) => s + i.price * i.cantidad, 0);
+            toolResults.push({
+              type: 'tool_result', tool_use_id: toolUse.id,
+              content: `Link de compra generado. Enviaselo al cliente y decile que al abrirlo va a ver el carrito con los productos y solo tiene que clickear "Iniciar Compra":\n${checkoutUrl}\n\nResumen: ${cart.length} productos, total $${total.toLocaleString('es-AR')}`,
+            });
+          }
         }
       }
 
@@ -551,7 +669,7 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
     const textBlock = res.content.find(b => b.type === 'text');
     return {
       text: textBlock ? textBlock.text : 'Disculpá, tuve un problema. ¿Podés repetirme?',
-      productsShown: allProductsShown, freshProducts,
+      productsShown: allProductsShown, freshProducts, cart: _cart,
     };
   }
 
@@ -563,10 +681,10 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
       model, max_tokens: 500, system: systemPromptBlocks, messages,
     });
     const textBlock = finalRes.content.find(b => b.type === 'text');
-    if (textBlock) return { text: textBlock.text, productsShown: allProductsShown, freshProducts };
+    if (textBlock) return { text: textBlock.text, productsShown: allProductsShown, freshProducts, cart: _cart };
   } catch { /* fall through */ }
 
-  return { text: 'Disculpá, tuve un problema procesando tu consulta. ¿Podés repetirme?', productsShown: allProductsShown, freshProducts };
+  return { text: 'Disculpá, tuve un problema procesando tu consulta. ¿Podés repetirme?', productsShown: allProductsShown, freshProducts, cart: _cart };
 }
 
 // ============================================================
@@ -1070,10 +1188,13 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     );
     if (hasCalc) extraTools.push(CALCULADORA_TOOL);
 
-    const { text: aiResponse, productsShown, freshProducts } = await generateResponse(
+    // Load existing cart from convState
+    const existingCart = (freshConv?.convState?.cart as any[]) || [];
+
+    const { text: aiResponse, productsShown, freshProducts, cart: updatedCart } = await generateResponse(
       combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
       imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
-      complexity, historySummary, extraTools,
+      complexity, historySummary, extraTools, existingCart,
     );
     recordSuccess();
 
@@ -1173,7 +1294,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       assignedTo: 'bot', unreadCount: 0,
       lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100),
       createdAt: conversation?.createdAt || now,
-      convState: { recentProducts: productsToSave },
+      convState: { recentProducts: productsToSave, cart: updatedCart || [] },
       channel,
     });
 

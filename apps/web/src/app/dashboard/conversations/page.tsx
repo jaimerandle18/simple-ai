@@ -64,7 +64,7 @@ export default function ConversationsPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedConv = conversations.find(c => c.conversationId === selectedId) || null;
-  const setSelectedConv = (conv: Conversation | null) => setSelectedId(conv?.conversationId || null);
+  const setSelectedConv = (conv: Conversation | null) => { setSelectedId(conv?.conversationId || null); setGoldenSaved(false); };
 
   useEffect(() => {
     if (!tenantId) return;
@@ -244,7 +244,6 @@ export default function ConversationsPage() {
         body: { conversationId: selectedConv.conversationId },
       });
       setGoldenSaved(true);
-      setTimeout(() => setGoldenSaved(false), 3000);
     } catch (err) { console.error(err); }
     setGoldenSaving(false);
   };
@@ -618,7 +617,9 @@ export default function ConversationsPage() {
                         </button>
                       )}
 
-                      <div className={`max-w-[75%] rounded-lg shadow-sm overflow-hidden ${
+                      <div className={`rounded-lg shadow-sm overflow-hidden ${
+                        isImage ? 'max-w-[260px]' : 'max-w-[65%]'
+                      } ${
                         isOutbound
                           ? 'bg-[#dcf8c6] rounded-tr-none'
                           : 'bg-white rounded-tl-none'
@@ -628,18 +629,18 @@ export default function ConversationsPage() {
                           <img
                             src={imgSrc}
                             alt=""
-                            className="w-full max-w-[300px] h-auto object-cover"
+                            className="w-[260px] h-auto rounded-t-lg"
                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                           />
                         )}
 
-                        {/* Texto */}
-                        <div className="px-3 py-1.5">
+                        {/* Texto / Caption */}
+                        <div className={isImage ? 'px-2 py-1.5' : 'px-3 py-1.5'}>
                           {isBotMessage && !isImage && (
                             <p className="text-[10px] text-primary-600 font-medium mb-0.5">Agente IA</p>
                           )}
                           {msg.content && msg.content !== '[El cliente envio una imagen]' && (
-                            <p className="text-sm text-gray-900 whitespace-pre-wrap">{msg.content}</p>
+                            <p className={`text-gray-900 whitespace-pre-wrap ${isImage ? 'text-xs leading-relaxed' : 'text-sm'}`}>{msg.content}</p>
                           )}
                           <p className="text-[10px] text-gray-400 text-right mt-0.5">
                             {new Date(msg.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}

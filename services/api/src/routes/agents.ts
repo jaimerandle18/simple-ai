@@ -353,7 +353,10 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
           brand: p.brand || '', imageUrl: p.images?.[0] || '', images: p.images || [],
           pageUrl: p.url, sourceUrl: url, searchableText: st,
           categoryNormalized: (p.category || '').toLowerCase().replace(/\s+/g, '_'),
-          sizes: [], outOfStockSizes: [], attributes: {}, createdAt: now,
+          sizes: p.variants?.filter(v => v.option1).map(v => v.option1) || [],
+          outOfStockSizes: p.variants?.filter(v => !v.available && v.option1).map(v => v.option1) || [],
+          variants: p.variants || [], tnProductId: p.productId,
+          attributes: {}, createdAt: now,
         };
       });
       for (let i = 0; i < productList.length; i += 25)
@@ -976,6 +979,8 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
         imageUrl: p.imageUrl,
         sizes: p.sizes,
         pageUrl: p.pageUrl,
+        variants: p.variants,
+        tnProductId: p.tnProductId,
       }));
     return json({ products, total: products.length });
   }

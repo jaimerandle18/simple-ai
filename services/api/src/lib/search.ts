@@ -249,6 +249,16 @@ export async function fetchSitemapUrls(baseUrl: string): Promise<string[]> {
   return [];
 }
 
+export interface ProductVariant {
+  variantId: number;
+  sku: string;
+  option0: string; // color
+  option1: string; // talle
+  price: number;
+  available: boolean;
+  stock: number;
+}
+
 export interface DirectProduct {
   name: string;
   price: string;
@@ -260,6 +270,8 @@ export interface DirectProduct {
   inStock?: boolean | null;
   url: string;
   category: string;
+  variants?: ProductVariant[];
+  productId?: number; // Tiendanube product_id
 }
 
 function _findProductLd(data: any): any | null {
@@ -301,6 +313,26 @@ export async function fetchProductDirect(url: string): Promise<DirectProduct | n
         const slug = url.replace(/\/$/, '').split('/').pop() || '';
         const pathParts = new URL(url).pathname.replace(/^\//, '').split('/');
         const category = pathParts.length >= 2 ? pathParts[pathParts.length - 2].replace(/-/g, ' ') : '';
+        // Extract Tiendanube variants (LS.variants)
+        let variants: ProductVariant[] | undefined;
+        let tnProductId: number | undefined;
+        try {
+          const varMatch = html.match(/LS\.variants\s*=\s*(\[[\s\S]*?\]);/);
+          if (varMatch) {
+            const raw = JSON.parse(varMatch[1]);
+            tnProductId = raw[0]?.product_id;
+            variants = raw.map((v: any) => ({
+              variantId: v.id,
+              sku: v.sku || '',
+              option0: v.option0 || '', // color
+              option1: v.option1 || '', // talle
+              price: v.price_number || 0,
+              available: v.available !== false && v.stock !== 0,
+              stock: v.stock || 0,
+            }));
+          }
+        } catch {}
+
         return {
           name: String(ld.name || '').trim(),
           price: priceNum > 0 ? String(priceNum) : 'Consultar',
@@ -312,6 +344,8 @@ export async function fetchProductDirect(url: string): Promise<DirectProduct | n
           inStock,
           url,
           category,
+          variants,
+          productId: tnProductId,
         };
       } catch {}
     }
