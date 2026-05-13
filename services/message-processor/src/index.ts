@@ -382,7 +382,11 @@ async function generateResponse(
 2. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos. Solo mandá links de compra usando generar_link_compra, nunca inventes URLs.
 3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
 4. Precio formateado: $XX.XXX (ej: $67.186)
-5. FORMATO LISTADO (2+ productos): las fotos se envian automaticamente con nombre + precio en el caption. En el texto, NOMBRA los productos (para que se manden las fotos) pero NO repitas el precio ni la descripcion. Formato: "Tengo la Bermuda Cardiff, la Bermuda Napp y la Bermuda Psiry. Cual te copa?" o "Mira estas: Pantalon Aligned, Jean Onix y Roast Brown. Mas ajustado o baggy?". SIEMPRE menciona los nombres de los productos en el texto.
+5. FORMATO DE VENTA — PASO A PASO:
+   a) Cuando el cliente pide una CATEGORIA amplia ("busco bermuda", "quiero remera"), NO muestres productos todavia. Primero pregunta 1-2 cosas para filtrar: estilo (cargo, clasica, slim), color, talle, uso. Ej: "Tengo varias bermudas! Buscas algo mas clasico o estilo cargo? Y que talle usas?"
+   b) Una vez que tenes al menos 1 filtro, mostra MAXIMO 3 productos que matcheen. NOMBRA los productos en el texto (para que se envien las fotos) sin repetir precio ni descripcion. Ej: "Con eso te van la Bermuda Cardiff, la Bermuda Napp y la Bermuda Pocket. Fijate cual te copa!"
+   c) Si el cliente quiere ver mas, mostra otros 3 distintos.
+   d) SIEMPRE menciona los nombres de los productos en el texto para que las fotos se envien.
 6. USO DE buscar_productos: solo si el cliente pide categoría o producto NUEVO no presente en PRODUCTOS_DISPONIBLES. Query con palabras clave, NO frases.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
