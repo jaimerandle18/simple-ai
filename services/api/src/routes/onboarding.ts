@@ -2,7 +2,7 @@
  * Onboarding Agent: chat conversacional que construye el BusinessConfig.
  */
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { keys, getItem, putItem } from '../lib/dynamo';
+import { keys, getItem, putItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
 import Anthropic from '@anthropic-ai/sdk';
 
