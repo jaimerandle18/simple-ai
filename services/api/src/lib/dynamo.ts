@@ -19,6 +19,7 @@ export const keys = {
   subscription: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'SUB#current' }),
   rule: (tenantId: string, ruleId: string) => ({ PK: `TENANT#${tenantId}`, SK: `RULE#${ruleId}` }),
   scraperConfig: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'SCRAPER#config' }),
+  scraperJob: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'SCRAPER#job' }),
 };
 
 // Generic helpers

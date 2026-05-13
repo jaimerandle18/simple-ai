@@ -30,6 +30,8 @@ async function proxyRequest(req: NextRequest, { params }: { params: { path: stri
   });
 }
 
+export const maxDuration = 300;
+
 export const GET = proxyRequest;
 export const POST = proxyRequest;
 export const PUT = proxyRequest;

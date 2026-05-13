@@ -228,6 +228,12 @@ COMPOSE`,
       resources: [`arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-api-*`],
     }));
 
+    // Allow the API Lambda to invoke itself asynchronously (for long scrape jobs)
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-api-${stage}`],
+    }));
+
     // Allow the API Lambda to manage EventBridge Scheduler rules
     apiLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:UpdateSchedule', 'scheduler:GetSchedule'],

@@ -156,14 +156,6 @@ function CatalogModal({ tenantId, onClose }: { tenantId: string; onClose: () => 
   );
 }
 
-const SCRAPE_STEPS = [
-  { label: 'Accediendo a la web', delay: 0 },
-  { label: 'Analizando estructura de la tienda', delay: 4000 },
-  { label: 'Buscando páginas de productos', delay: 10000 },
-  { label: 'Escaneando catálogo de productos', delay: 20000 },
-  { label: 'Extrayendo información y precios', delay: 55000 },
-  { label: 'Generando actualizador automático', delay: 95000 },
-];
 
 interface AttachedFile {
   fileKey: string;
@@ -227,9 +219,8 @@ export default function ScraperPage() {
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState('');
 
-  const [scrapeStep, setScrapeStep] = useState(-1);
+  const [scrapeProgress, setScrapeProgress] = useState('');
   const [scrapeFinishedCount, setScrapeFinishedCount] = useState<number | null>(null);
-  const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [showCatalog, setShowCatalog] = useState(false);
   const closeCatalog = useCallback(() => setShowCatalog(false), []);
 
@@ -269,35 +260,37 @@ export default function ScraperPage() {
     if (!tenantId || !config.websiteUrl) return;
     setScraping(true);
     setScrapeResult('');
-    setScrapeStep(0);
+    setScrapeProgress('Iniciando escaneo...');
     setScrapeFinishedCount(null);
 
-    // Schedule step transitions
-    stepTimers.current.forEach(clearTimeout);
-    stepTimers.current = SCRAPE_STEPS.slice(1).map((s, i) =>
-      setTimeout(() => setScrapeStep(i + 1), s.delay)
-    );
-
     try {
-      const result = await api('/agents/scrape', {
+      await api('/agents/scrape', {
         method: 'POST',
         tenantId,
         body: { url: config.websiteUrl },
       });
-      stepTimers.current.forEach(clearTimeout);
-      setScrapeStep(SCRAPE_STEPS.length); // all done
-      setScrapeFinishedCount(result.productsCount);
-      setConfig((prev) => ({
-        ...prev,
-        websiteScraped: true,
-        productsCount: result.productsCount,
-      }));
-      setScrapeResult(`Se encontraron ${result.productsCount} productos`);
-      const scheduleData = await api('/agents/scrape/schedule', { tenantId });
-      setSchedule(scheduleData);
+
+      // Poll until done or error
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const status = await api('/agents/scrape/status', { tenantId });
+          if (status.progress) setScrapeProgress(status.progress);
+          if (status.status === 'done') {
+            done = true;
+            setScrapeFinishedCount(status.productsCount);
+            setConfig(prev => ({ ...prev, websiteScraped: true, productsCount: status.productsCount }));
+            setScrapeResult(`Se encontraron ${status.productsCount} productos`);
+            const scheduleData = await api('/agents/scrape/schedule', { tenantId });
+            setSchedule(scheduleData);
+          } else if (status.status === 'error') {
+            done = true;
+            setScrapeResult('Error al escanear: ' + (status.error || 'Error desconocido'));
+          }
+        } catch {}
+      }
     } catch (err: any) {
-      stepTimers.current.forEach(clearTimeout);
-      setScrapeStep(-1);
       setScrapeResult('Error al escanear: ' + err.message);
     }
     setScraping(false);
@@ -458,42 +451,11 @@ export default function ScraperPage() {
             </button>
           </div>
 
-          {/* Progress steps while scraping */}
+          {/* Progress while scraping */}
           {scraping && (
-            <div className="mt-5 space-y-2">
-              {SCRAPE_STEPS.map((s, i) => {
-                const done = i < scrapeStep;
-                const active = i === scrapeStep;
-                return (
-                  <div key={i} className={`flex items-center gap-3 transition-opacity duration-300 ${i > scrapeStep ? 'opacity-30' : 'opacity-100'}`}>
-                    <div className="w-5 h-5 shrink-0 flex items-center justify-center">
-                      {done ? (
-                        <svg className="w-5 h-5 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                        </svg>
-                      ) : active ? (
-                        <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <div className="w-2 h-2 rounded-full bg-gray-300" />
-                      )}
-                    </div>
-                    <span className={`text-sm ${done ? 'text-emerald-600' : active ? 'text-gray-900 font-medium' : 'text-gray-400'}`}>
-                      {s.label}
-                    </span>
-                  </div>
-                );
-              })}
-
-              {scrapeFinishedCount !== null && (
-                <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-2">
-                  <svg className="w-5 h-5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                  </svg>
-                  <span className="text-sm font-semibold text-gray-900">
-                    {scrapeFinishedCount} productos relevados
-                  </span>
-                </div>
-              )}
+            <div className="mt-4 flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin shrink-0" />
+              <span className="text-sm text-gray-700">{scrapeProgress || 'Iniciando...'}</span>
             </div>
           )}
 

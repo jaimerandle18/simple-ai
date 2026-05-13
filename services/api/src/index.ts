@@ -3,7 +3,7 @@ import { json, error } from './lib/response';
 import { handleAuth } from './routes/auth';
 import { handleTenants } from './routes/tenants';
 import { handleConversations } from './routes/conversations';
-import { handleAgents, runScraper } from './routes/agents';
+import { handleAgents, runScraper, runFullScrape } from './routes/agents';
 import { handleContacts } from './routes/contacts';
 import { handleTest } from './routes/test';
 import { handleFiles } from './routes/files';
@@ -16,6 +16,17 @@ import { handleRegression } from './routes/regression';
 export const handler = async (
   event: any
 ): Promise<any> => {
+  // Async full scrape (Lambda self-invocation)
+  if ((event as any).action === 'scrape-full' && (event as any).tenantId) {
+    try {
+      await runFullScrape((event as any).tenantId, (event as any).url);
+      return { ok: true };
+    } catch (err: any) {
+      console.error('[SCRAPE-FULL] error:', err);
+      return { ok: false, error: err.message };
+    }
+  }
+
   // EventBridge Scheduler event
   if ((event as any).action === 'scrape-run' && (event as any).tenantId) {
     try {
