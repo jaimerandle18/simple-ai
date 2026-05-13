@@ -179,6 +179,7 @@ export default function OnboardingPage() {
   const [wasCompleted, setWasCompleted] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [reactivating, setReactivating] = useState(false);
+  const [pendingEdit, setPendingEdit] = useState<{ fieldId: string; fieldLabel: string; value: any; oldValue: any } | null>(null);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     const id = Math.random().toString(36).slice(2);
@@ -294,12 +295,53 @@ export default function OnboardingPage() {
     return config[field.dependsOn.fieldId] === field.dependsOn.value;
   }, [config]);
 
+  const isCurrentSectionCompleted = currentSection ? sectionStates[currentSection.id] === 'completed' : false;
+
   const setValue = (fieldId: string, value: any) => {
+    // If section already completed, ask for confirmation first
+    if (isCurrentSectionCompleted) {
+      const field = FIELDS.find(f => f.id === fieldId);
+      setPendingEdit({ fieldId, fieldLabel: field?.label || fieldId, value, oldValue: config[fieldId] });
+      return;
+    }
+    applyValue(fieldId, value);
+  };
+
+  const applyValue = (fieldId: string, value: any) => {
     setConfig(prev => ({ ...prev, [fieldId]: value }));
     setErrors(prev => { const n = { ...prev }; delete n[fieldId]; return n; });
     setAiResult(prev => { const n = { ...prev }; delete n[fieldId]; return n; });
-    if (wasCompleted) setHasPendingChanges(true);
   };
+
+  const confirmEdit = async () => {
+    if (!pendingEdit || !tenantId || !currentSection) return;
+    // Apply the change
+    applyValue(pendingEdit.fieldId, pendingEdit.value);
+    setPendingEdit(null);
+
+    // Auto-save the section
+    setSaving(true);
+    const fieldValues: Record<string, any> = {};
+    for (const f of sectionFields) {
+      if (isFieldVisible(f)) {
+        fieldValues[f.id] = f.id === pendingEdit.fieldId
+          ? pendingEdit.value
+          : (config[f.id] ?? (f.type === 'toggle' ? false : f.type === 'multi_select' ? [] : ''));
+      }
+    }
+    try {
+      await api('/onboarding/v2/save-section', {
+        method: 'POST', tenantId,
+        body: { sectionId: currentSection.id, fields: fieldValues },
+      });
+      showToast('success', `${currentSection.label} actualizado`);
+    } catch {
+      showToast('error', 'Error al guardar');
+    }
+    setSaving(false);
+  };
+
+  const cancelEdit = () => setPendingEdit(null);
 
   const improveField = async (fieldId: string) => {
     const value = config[fieldId];
@@ -601,15 +643,37 @@ export default function OnboardingPage() {
               Atras
             </button>
 
+            {isCurrentSectionCompleted ? (
+              <span className="text-xs text-gray-400">Seccion guardada. Edita un campo para modificar.</span>
+            ) : (
             <button onClick={saveSection} disabled={saving}
               className="bg-primary-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50 flex items-center gap-2">
               {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : null}
               {saving ? 'Guardando...' : 'Guardar y continuar'}
               {!saving && <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" /></svg>}
             </button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Edit confirmation modal */}
+      {pendingEdit && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={cancelEdit}>
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-gray-900 mb-1">Editar {pendingEdit.fieldLabel}?</p>
+            <p className="text-xs text-gray-500 mb-4">El cambio se guarda automaticamente.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={cancelEdit} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+              <button onClick={confirmEdit} disabled={saving}
+                className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center gap-1.5">
+                {saving && <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                Si, editar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toasts */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
