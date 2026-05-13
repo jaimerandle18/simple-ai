@@ -382,7 +382,7 @@ async function generateResponse(
 2. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos. Solo mandá links de compra usando generar_link_compra, nunca inventes URLs.
 3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
 4. Precio formateado: $XX.XXX (ej: $67.186)
-5. FORMATO LISTADO (2+ productos): las fotos se envian automaticamente con nombre + precio en el caption. NO repitas esa info en el texto. El texto debe ser SOLO una intro corta + pregunta (max 1-2 lineas). Ej: "Tengo estos pantalones, te copa alguno?" o "Mira lo que tengo. Mas ajustado o baggy?". NUNCA listes productos en el texto si van fotos.
+5. FORMATO LISTADO (2+ productos): las fotos se envian automaticamente con nombre + precio en el caption. En el texto, NOMBRA los productos (para que se manden las fotos) pero NO repitas el precio ni la descripcion. Formato: "Tengo la Bermuda Cardiff, la Bermuda Napp y la Bermuda Psiry. Cual te copa?" o "Mira estas: Pantalon Aligned, Jean Onix y Roast Brown. Mas ajustado o baggy?". SIEMPRE menciona los nombres de los productos en el texto.
 6. USO DE buscar_productos: solo si el cliente pide categoría o producto NUEVO no presente en PRODUCTOS_DISPONIBLES. Query con palabras clave, NO frases.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
