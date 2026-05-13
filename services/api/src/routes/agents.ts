@@ -966,13 +966,18 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
   // GET /agents/scrape/schedule — GET SCHEDULE CONFIG
   // ============================================================
   if (method === 'GET' && path === '/agents/scrape/schedule') {
-    const cfg = await getItem(keys.scraperConfig(tenantId));
-    if (!cfg) return json({ configured: false });
+    const [cfg, job] = await Promise.all([
+      getItem(keys.scraperConfig(tenantId)),
+      getItem(keys.scraperJob(tenantId)),
+    ]);
+    if (!cfg && !job) return json({ configured: false });
     return json({
-      configured: true,
-      baseUrl: cfg.baseUrl,
-      lastRun: cfg.lastRun,
-      schedule: cfg.schedule || { enabled: false, timesPerDay: 1, hours: [9] },
+      configured: !!(cfg || job),
+      baseUrl: (cfg as any)?.baseUrl || (job as any)?.url,
+      lastRun: (cfg as any)?.lastRun,
+      schedule: (cfg as any)?.schedule || { enabled: false, timesPerDay: 1, hours: [9] },
+      productsCount: (job as any)?.productsCount || 0,
+      websiteScraped: (job as any)?.status === 'done',
     });
   }
 

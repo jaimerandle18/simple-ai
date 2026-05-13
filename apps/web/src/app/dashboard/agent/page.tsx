@@ -232,7 +232,12 @@ export default function ScraperPage() {
       api('/agents/scrape/schedule', { tenantId }),
     ])
       .then(([agentData, scheduleData]) => {
-        if (agentData.agentConfig) setConfig(agentData.agentConfig);
+        const baseConfig = agentData.agentConfig || {};
+        setConfig({
+          ...baseConfig,
+          websiteScraped: scheduleData.websiteScraped ?? baseConfig.websiteScraped ?? false,
+          productsCount: scheduleData.productsCount || baseConfig.productsCount || 0,
+        });
         setSchedule(scheduleData);
         if (scheduleData.schedule) {
           setScheduleEnabled(scheduleData.schedule.enabled);
