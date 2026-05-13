@@ -28,17 +28,25 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const TOOLS: Anthropic.Tool[] = [
   {
     name: 'buscar_productos',
-    description: 'Busca productos en el catálogo del negocio. Usala cuando necesites encontrar productos por nombre, categoría, uso, o cuando el cliente pida comparar o ver más opciones.',
+    description: 'Busca productos en el catálogo. Acepta filtros opcionales por color, talle y categoria. SIEMPRE usa los filtros que el cliente menciono.',
     input_schema: {
       type: 'object' as const,
       properties: {
         query: {
           type: 'string',
-          description: 'Texto libre para buscar: nombre de producto, categoría, uso, etc. Ej: "amoladora", "sierras", "para cortar madera"',
+          description: 'Texto libre para buscar: nombre, categoria, uso. Ej: "buzo capucha", "remera oversize"',
         },
         categoria: {
           type: 'string',
-          description: 'Filtrar por categoría específica. Ej: "Amoladoras Angulares", "Hidrolavadoras"',
+          description: 'Categoria especifica. Ej: "Buzos", "Remeras"',
+        },
+        color: {
+          type: 'string',
+          description: 'Color especifico. Ej: "negro", "blanco", "azul", "marron"',
+        },
+        talle: {
+          type: 'string',
+          description: 'Talle requerido. Solo devuelve productos con stock en ese talle. Ej: "L", "M", "36"',
         },
       },
       required: ['query'],
@@ -71,12 +79,56 @@ const TOOLS: Anthropic.Tool[] = [
 ];
 
 // ============================================================
-// BÚSQUEDA DE PRODUCTOS (Fuse.js, cero LLM)
+// BÚSQUEDA DE PRODUCTOS (Fuse.js + filtros color/talle)
 // ============================================================
-function searchCatalog(query: string, catalog: EnrichedProduct[], categoria?: string): EnrichedProduct[] {
-  let pool = catalog;
+const COLOR_MAP: Record<string, string[]> = {
+  negro: ['negro', 'black'], blanco: ['blanco', 'white', 'bone', 'crudo', 'ecru'],
+  marron: ['marron', 'brown', 'camel', 'chocolate', 'tabaco'], azul: ['azul', 'blue', 'sky', 'celeste', 'navy'],
+  gris: ['gris', 'grey', 'gray'], verde: ['verde', 'green', 'militar', 'oliva'],
+  rojo: ['rojo', 'red', 'bordo', 'burgundy', 'merlot'], rosa: ['rosa', 'pink'],
+  beige: ['beige', 'arena', 'nude', 'natural'], amarillo: ['amarillo', 'yellow', 'mustard'],
+  naranja: ['naranja', 'orange', 'oxide', 'oxido'],
+};
 
-  // Filtrar por categoría si se pidió
+function normalizeColor(color: string): string[] {
+  const c = color.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [key, aliases] of Object.entries(COLOR_MAP)) {
+    if (aliases.includes(c) || key === c) return aliases;
+  }
+  return [c];
+}
+
+function productMatchesColor(p: any, colorAliases: string[]): boolean {
+  const nameLower = (p.name || '').toLowerCase();
+  if (colorAliases.some(c => nameLower.includes(c))) return true;
+  const variants = (p.variants || []) as any[];
+  if (variants.length > 0) {
+    return variants.some((v: any) => {
+      const o0 = (v.option0 || '').toLowerCase();
+      return colorAliases.some(c => o0.includes(c));
+    });
+  }
+  return false;
+}
+
+function productHasSizeInStock(p: any, talle: string): boolean {
+  const sizes: string[] = p.sizes || [];
+  const outOfStock: string[] = p.outOfStockSizes || [];
+  const talleUpper = talle.toUpperCase();
+  if (outOfStock.some(s => s.toUpperCase() === talleUpper)) return false;
+  if (sizes.length > 0) return sizes.some(s => s.toUpperCase() === talleUpper);
+  // If no size data, check variants
+  const variants = (p.variants || []) as any[];
+  return variants.some((v: any) => (v.option1 || '').toUpperCase() === talleUpper && v.available !== false);
+}
+
+function searchCatalog(query: string, catalog: EnrichedProduct[], filters?: { categoria?: string; color?: string; talle?: string }): EnrichedProduct[] {
+  let pool = catalog;
+  const categoria = filters?.categoria;
+  const color = filters?.color;
+  const talle = filters?.talle;
+
+  // Filter by category
   if (categoria) {
     const catNorm = categoria.toLowerCase();
     const filtered = pool.filter(p =>
@@ -84,9 +136,25 @@ function searchCatalog(query: string, catalog: EnrichedProduct[], categoria?: st
       (p.categoryNormalized || '').toLowerCase().includes(catNorm) ||
       (p.categoryParent || '').toLowerCase().includes(catNorm)
     );
+    if (filtered.length > 0) { console.log(`[SEARCH] category "${catNorm}": ${pool.length} → ${filtered.length}`); pool = filtered; }
+  }
+
+  // Filter by color
+  if (color) {
+    const aliases = normalizeColor(color);
+    const filtered = pool.filter(p => productMatchesColor(p, aliases));
+    console.log(`[SEARCH] color "${color}" (aliases: ${aliases.join(',')}): ${pool.length} → ${filtered.length}`);
     if (filtered.length > 0) pool = filtered;
   }
 
+  // Filter by talle (size in stock)
+  if (talle) {
+    const filtered = pool.filter(p => productHasSizeInStock(p, talle));
+    console.log(`[SEARCH] talle "${talle}": ${pool.length} → ${filtered.length}`);
+    if (filtered.length > 0) pool = filtered;
+  }
+
+  // Fuse.js search on filtered pool
   const fuse = new Fuse(pool, {
     keys: [
       { name: 'name', weight: 0.4 },
@@ -101,14 +169,12 @@ function searchCatalog(query: string, catalog: EnrichedProduct[], categoria?: st
   });
 
   const results = fuse.search(query);
-  if (results.length > 0) {
-    return results.slice(0, 6).map(r => r.item);
-  }
+  if (results.length > 0) return results.slice(0, 6).map(r => r.item);
 
-  // Fallback: búsqueda por keywords en texto
+  // Fallback: keyword search
   const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const terms = normalize(query).split(/\s+/).filter(t => t.length >= 3);
-  if (terms.length === 0) return [];
+  if (terms.length === 0) return pool.slice(0, 6); // If no query terms but filters matched, return filtered pool
 
   return pool
     .map(p => {
@@ -423,7 +489,7 @@ async function generateResponse(
    d) SIEMPRE menciona los nombres de los productos en el texto.
    e) EJEMPLOS CORRECTOS: "Te paso la Bermuda Cardiff, la Napp y la Pocket. Cual te copa?" o "Mira estas 3. Mas oscuro o mas claro?"
    f) EJEMPLOS INCORRECTOS: "La Cardiff $55.000 es de gabardina, la Napp $48.000..." (repite info del caption).
-6. USO DE buscar_productos: solo si el cliente pide categoría o producto NUEVO no presente en PRODUCTOS_DISPONIBLES. Query con palabras clave, NO frases.
+6. USO DE buscar_productos: solo si el cliente pide producto NUEVO. SIEMPRE pasa los filtros que el cliente menciono (color, talle, categoria). Ej: "buzos negros en L" → buscar_productos({ query: "buzo", color: "negro", talle: "L" }). REGLA DE ORO: si el cliente pidio un filtro, NUNCA muestres productos que no lo cumplan.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
 9. ENVÍOS, PAGOS, HORARIOS, UBICACIÓN: respondé con lo que sepas. Si no tenés el dato exacto, derivá.
@@ -591,9 +657,9 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
         if (toolUse.type !== 'tool_use') continue;
 
         if (toolUse.name === 'buscar_productos') {
-          const input = toolUse.input as { query: string; categoria?: string };
-          console.log(`Tool call: buscar_productos("${input.query}"${input.categoria ? `, cat="${input.categoria}"` : ''})`);
-          const found = searchCatalog(input.query, catalog, input.categoria);
+          const input = toolUse.input as { query: string; categoria?: string; color?: string; talle?: string };
+          console.log(`Tool call: buscar_productos("${input.query}"${input.categoria ? `, cat="${input.categoria}"` : ''}${input.color ? `, color="${input.color}"` : ''}${input.talle ? `, talle="${input.talle}"` : ''})`);
+          const found = searchCatalog(input.query, catalog, { categoria: input.categoria, color: input.color, talle: input.talle });
           allProductsShown = [...allProductsShown, ...found];
           freshProducts = [...freshProducts, ...found];
           toolResults.push({
