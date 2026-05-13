@@ -362,7 +362,8 @@ async function generateResponse(
 12. FOTOS: si nombrás un producto, mencionalo COMPLETO con nombre + precio o specs.
 13. NUNCA preguntes "¿te mando foto?". O nombrás el producto con datos o no lo nombrás.
 14. IMAGENES DEL CLIENTE: si manda una foto, analizala y buscá productos similares con buscar_productos.
-15. PRODUCTOS YA MOSTRADOS: referenciá natural: "la que te mostré", "esa misma". No re-introduzcas productos ya vistos.`;
+15. PRODUCTOS YA MOSTRADOS: referenciá natural: "la que te mostré", "esa misma". No re-introduzcas productos ya vistos.
+16. INFO DEL NEGOCIO: si hay secciones de INFORMACION_NEGOCIO o PAGINAS_DEL_SITIO, usá esos datos para responder preguntas sobre envíos, pagos, cambios, horarios, ubicación. NO digas "no tengo esa info" si está disponible.`;
 
   const activeRules = agentConfig.extraInstructions || HARDCODED_RULES;
 
@@ -396,10 +397,13 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
   const memoryBlock = agentConfig._contactMemory
     ? `\n# MEMORIA DEL CLIENTE (de conversaciones anteriores)\n${agentConfig._contactMemory}\nUsá esta info para personalizar: saludá por nombre si lo sabés, recordá lo que consultó antes.`
     : '';
+  const sitePagesBlock = agentConfig._sitePages
+    ? `\n# PAGINAS_DEL_SITIO (info real del negocio, usala para responder)\n${agentConfig._sitePages}`
+    : '';
   const summaryBlock = historySummary
     ? `\n# RESUMEN DE CONVERSACIÓN PREVIA\n${historySummary}`
     : '';
-  const volatileBlock = memoryBlock + summaryBlock + productsBlock;
+  const volatileBlock = memoryBlock + summaryBlock + sitePagesBlock + productsBlock;
 
   // System prompt como array con cache_control para Anthropic
   const systemPromptBlocks: Anthropic.TextBlockParam[] = [
@@ -977,6 +981,23 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
     const contactMemory = await loadContactMemory(tenantId, externalUserId);
     if (contactMemory) agentCfg._contactMemory = contactMemory;
+
+    // Cargar info contextual del sitio (páginas institucionales)
+    try {
+      const sitePages: any[] = await queryItems(`TENANT#${tenantId}`, 'SITEPAGE#', { limit: 10 });
+      if (sitePages.length > 0) {
+        // Matchear páginas relevantes al mensaje del cliente
+        const msgLower = combinedMessage.toLowerCase();
+        const relevant = sitePages.filter((p: any) =>
+          (p.keywords || []).some((kw: string) => msgLower.includes(kw))
+        );
+        if (relevant.length > 0) {
+          agentCfg._sitePages = relevant.map((p: any) =>
+            `[${(p.type || '').toUpperCase()}]\n${(p.content || '').slice(0, 2000)}`
+          ).join('\n\n');
+        }
+      }
+    } catch {}
 
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
     const trivial = isTrivialMessage(combinedMessage);

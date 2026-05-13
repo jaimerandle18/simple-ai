@@ -389,3 +389,299 @@ export function findRelevantProducts(products: any[], keywords: string[]): any[]
     .sort((a, b) => b.score - a.score)
     .slice(0, 10);
 }
+
+// ============================================================
+// INSTITUTIONAL PAGES SCRAPER
+// ============================================================
+
+const INSTITUTIONAL_PATTERNS: Record<string, RegExp> = {
+  envios: /env[ií]os?|shipping|delivery|despacho/i,
+  pagos: /pagos?|payment|medios.*pago|formas.*pago/i,
+  cambios: /cambios?|devoluciones?|returns?|reembolso/i,
+  garantia: /garant[ií]a|warranty/i,
+  faq: /faq|preguntas.*frecuentes|ayuda|help/i,
+  contacto: /contacto|contact|ubicaci[oó]n|sucursal/i,
+  nosotros: /sobre.*nosotros|qui[eé]nes.*somos|about|nuestra.*historia/i,
+  terminos: /t[eé]rminos|condiciones|terms|legal|privacidad|privacy/i,
+};
+
+function extractMainText(html: string): string {
+  // Sacar scripts, styles, nav, footer, header
+  let clean = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.slice(0, 5000); // Max 5KB
+}
+
+export interface SitePage {
+  type: string;
+  url: string;
+  content: string;
+  keywords: string[];
+}
+
+export async function scrapeInstitutionalPages(sitemapUrls: string[], baseUrl: string): Promise<SitePage[]> {
+  const base = baseUrl.replace(/\/$/, '');
+  const pages: SitePage[] = [];
+
+  // Buscar en sitemap
+  const candidates: { url: string; type: string }[] = [];
+  for (const url of sitemapUrls) {
+    const path = url.replace(base, '').toLowerCase();
+    for (const [type, pattern] of Object.entries(INSTITUTIONAL_PATTERNS)) {
+      if (pattern.test(path)) {
+        candidates.push({ url, type });
+        break;
+      }
+    }
+  }
+
+  // Si no hay en sitemap, probar URLs comunes
+  if (candidates.length < 3) {
+    const commonPaths = [
+      { path: '/envios', type: 'envios' }, { path: '/shipping', type: 'envios' },
+      { path: '/pagos', type: 'pagos' }, { path: '/medios-de-pago', type: 'pagos' },
+      { path: '/cambios-y-devoluciones', type: 'cambios' }, { path: '/devoluciones', type: 'cambios' },
+      { path: '/preguntas-frecuentes', type: 'faq' }, { path: '/faq', type: 'faq' },
+      { path: '/contacto', type: 'contacto' }, { path: '/contact', type: 'contacto' },
+      { path: '/sobre-nosotros', type: 'nosotros' }, { path: '/quienes-somos', type: 'nosotros' },
+    ];
+    for (const { path, type } of commonPaths) {
+      if (!candidates.some(c => c.type === type)) {
+        candidates.push({ url: base + path, type });
+      }
+    }
+  }
+
+  // Scrapear en batches de 5
+  for (let i = 0; i < candidates.length; i += 5) {
+    const batch = candidates.slice(i, i + 5);
+    const results = await Promise.allSettled(batch.map(async ({ url, type }) => {
+      try {
+        const res = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProductBot/1.0)', 'Accept-Language': 'es-AR,es;q=0.9' },
+          signal: AbortSignal.timeout(10000),
+          redirect: 'follow',
+        });
+        if (!res.ok) return null;
+        const html = await res.text();
+        const text = extractMainText(html);
+        if (text.length < 50) return null;
+
+        // Keywords para matching con preguntas del cliente
+        const keywords: string[] = [];
+        if (type === 'envios') keywords.push('envio', 'envios', 'despacho', 'delivery', 'correo', 'transporte', 'zona', 'costo envio', 'envio gratis', 'demora');
+        if (type === 'pagos') keywords.push('pago', 'pagos', 'tarjeta', 'transferencia', 'efectivo', 'mercadopago', 'cuotas', 'metodo');
+        if (type === 'cambios') keywords.push('cambio', 'devolucion', 'devolver', 'reembolso', 'garantia', 'cambiar');
+        if (type === 'faq') keywords.push('pregunta', 'ayuda', 'como', 'donde', 'cuando', 'cuanto');
+        if (type === 'contacto') keywords.push('contacto', 'telefono', 'email', 'direccion', 'ubicacion', 'horario', 'donde', 'local');
+        if (type === 'nosotros') keywords.push('nosotros', 'historia', 'empresa', 'equipo', 'quienes');
+
+        return { type, url, content: text, keywords } as SitePage;
+      } catch {
+        return null;
+      }
+    }));
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) pages.push(r.value);
+    }
+  }
+
+  console.log(`[INSTITUTIONAL] Found ${pages.length} pages: ${pages.map(p => p.type).join(', ')}`);
+  return pages;
+}
+
+// ============================================================
+// BUSINESS DATA FROM JSON-LD + FOOTER
+// ============================================================
+
+export interface BusinessData {
+  nombre?: string;
+  direccion?: string;
+  telefono?: string;
+  email?: string;
+  horarios?: string;
+  redes?: Record<string, string>;
+  descripcion?: string;
+  rubro?: string;
+}
+
+export async function scrapeBusinessData(baseUrl: string): Promise<BusinessData> {
+  const data: BusinessData = {};
+
+  try {
+    const res = await fetch(baseUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProductBot/1.0)', 'Accept-Language': 'es-AR,es;q=0.9' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return data;
+    const html = await res.text();
+
+    // 1. JSON-LD: Organization, LocalBusiness, Store
+    const scriptRe = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = scriptRe.exec(html)) !== null) {
+      try {
+        const ld = JSON.parse(m[1]);
+        const items = Array.isArray(ld) ? ld : [ld];
+        for (const item of items) {
+          const type = item['@type'] || '';
+          if (['Organization', 'LocalBusiness', 'Store', 'OnlineStore'].includes(type)) {
+            if (item.name) data.nombre = item.name;
+            if (item.description) data.descripcion = item.description;
+            if (item.telephone) data.telefono = item.telephone;
+            if (item.email) data.email = item.email;
+            if (item.address) {
+              const addr = typeof item.address === 'string' ? item.address : [item.address.streetAddress, item.address.addressLocality, item.address.addressRegion].filter(Boolean).join(', ');
+              if (addr) data.direccion = addr;
+            }
+            if (item.openingHours) data.horarios = Array.isArray(item.openingHours) ? item.openingHours.join(', ') : item.openingHours;
+            if (item.sameAs) {
+              data.redes = {};
+              const links = Array.isArray(item.sameAs) ? item.sameAs : [item.sameAs];
+              for (const link of links) {
+                if (link.includes('instagram')) data.redes.instagram = link;
+                if (link.includes('facebook')) data.redes.facebook = link;
+                if (link.includes('twitter') || link.includes('x.com')) data.redes.twitter = link;
+                if (link.includes('tiktok')) data.redes.tiktok = link;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Fallback: footer
+    const footerMatch = html.match(/<footer[\s\S]*?<\/footer>/i);
+    if (footerMatch) {
+      const footerText = extractMainText(footerMatch[0]);
+      // Extraer email
+      if (!data.email) {
+        const emailMatch = footerText.match(/[\w.-]+@[\w.-]+\.\w+/);
+        if (emailMatch) data.email = emailMatch[0];
+      }
+      // Extraer teléfono
+      if (!data.telefono) {
+        const phoneMatch = footerText.match(/(?:\+54|0\d{2,4}[\s-]?\d{3,4}[\s-]?\d{4}|\d{2,4}[\s-]\d{4}[\s-]\d{4})/);
+        if (phoneMatch) data.telefono = phoneMatch[0];
+      }
+      // Extraer redes del footer
+      if (!data.redes || Object.keys(data.redes).length === 0) {
+        data.redes = {};
+        const igMatch = footerText.match(/@[\w.]+/) || html.match(/instagram\.com\/([\w.]+)/i);
+        if (igMatch) data.redes.instagram = igMatch[0];
+      }
+    }
+
+    // 3. Meta tags
+    if (!data.nombre) {
+      const ogName = html.match(/<meta[^>]*property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i);
+      if (ogName) data.nombre = ogName[1];
+    }
+    if (!data.descripcion) {
+      const metaDesc = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+      if (metaDesc) data.descripcion = metaDesc[1];
+    }
+
+  } catch (err) {
+    console.error('[BUSINESS-DATA] Error:', err);
+  }
+
+  console.log(`[BUSINESS-DATA] Extracted: ${Object.keys(data).filter(k => (data as any)[k]).join(', ')}`);
+  return data;
+}
+
+// ============================================================
+// PRODUCT VARIANTS (stock real)
+// ============================================================
+
+export interface ProductVariant {
+  size: string;
+  color?: string;
+  available: boolean;
+  price?: number;
+}
+
+export async function getProductVariants(productUrl: string): Promise<ProductVariant[]> {
+  try {
+    const res = await fetch(productUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProductBot/1.0)' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+
+    // Método 1: Tiendanube JSON en HTML
+    const tnMatch = html.match(/var\s+product_variants\s*=\s*(\[[\s\S]*?\]);/);
+    if (tnMatch) {
+      try {
+        const variants = JSON.parse(tnMatch[1]);
+        return variants.map((v: any) => ({
+          size: v.option0 || v.values?.[0] || '',
+          color: v.option1 || v.values?.[1] || undefined,
+          available: v.available !== false && v.stock !== 0,
+          price: v.price ? Math.round(v.price / 100) : undefined,
+        })).filter((v: any) => v.size);
+      } catch {}
+    }
+
+    // Método 2: Shopify product JSON
+    const shopifyMatch = html.match(/var\s+meta\s*=\s*(\{[\s\S]*?"product"[\s\S]*?\});/);
+    if (shopifyMatch) {
+      try {
+        const meta = JSON.parse(shopifyMatch[1]);
+        const variants = meta.product?.variants || [];
+        return variants.map((v: any) => ({
+          size: v.option1 || v.title || '',
+          color: v.option2 || undefined,
+          available: v.available !== false,
+          price: v.price ? Math.round(v.price / 100) : undefined,
+        })).filter((v: any) => v.size);
+      } catch {}
+    }
+
+    // Método 3: JSON-LD offers
+    const scriptRe = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = scriptRe.exec(html)) !== null) {
+      try {
+        const ld = _findProductLd(JSON.parse(m[1]));
+        if (!ld?.offers) continue;
+        const offers = Array.isArray(ld.offers) ? ld.offers : [ld.offers];
+        if (offers.length <= 1) continue;
+        return offers.map((o: any) => ({
+          size: o.name || o.sku || '',
+          available: o.availability ? o.availability.includes('InStock') : true,
+          price: o.price ? Math.round(parseFloat(String(o.price).replace(/[^\d.]/g, ''))) : undefined,
+        })).filter((v: any) => v.size);
+      } catch {}
+    }
+
+    // Método 4: select/option elements con talles
+    const selectMatch = html.match(/<select[^>]*(?:name|id)=["'][^"']*(?:size|talle|variant)[^"']*["'][^>]*>([\s\S]*?)<\/select>/i);
+    if (selectMatch) {
+      const options = [...selectMatch[1].matchAll(/<option[^>]*value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi)];
+      if (options.length > 0) {
+        return options
+          .filter(o => o[1] && o[1] !== '' && !o[2].toLowerCase().includes('seleccion'))
+          .map(o => ({
+            size: o[2].trim(),
+            available: !o[0].includes('disabled') && !o[2].toLowerCase().includes('agotado'),
+          }));
+      }
+    }
+
+  } catch {}
+  return [];
+}

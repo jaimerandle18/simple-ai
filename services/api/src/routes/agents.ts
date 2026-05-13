@@ -1,7 +1,7 @@
 import { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { keys, getItem, putItem, deleteItem, queryItems } from '../lib/dynamo';
 import { json, error } from '../lib/response';
-import { crawlWebsite, scrapePage, mapSite, fetchSitemapUrls, fetchProductDirect } from '../lib/search';
+import { crawlWebsite, scrapePage, mapSite, fetchSitemapUrls, fetchProductDirect, scrapeInstitutionalPages, scrapeBusinessData, getProductVariants, SitePage } from '../lib/search';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
@@ -601,6 +601,78 @@ Solo incluí campos que REALMENTE encontraste. No inventes. Si no hay dato, no i
         lastRun: now, createdAt: (existingCfg as any)?.createdAt || now, updatedAt: now,
       });
     } catch (err) { console.error('[SCRAPER] extractor error:', err); }
+
+    // ─── ENRIQUECIMIENTO: páginas institucionales + business data + variantes ───
+    await setProgress('Extrayendo info del negocio...');
+
+    // 1. Business data (JSON-LD + footer de la home)
+    try {
+      const bizData = await scrapeBusinessData(url);
+      if (Object.keys(bizData).length > 0) {
+        const agentItem = await getItem(keys.agent(tenantId, 'main'));
+        if (agentItem) {
+          const bc = agentItem.businessConfig || {};
+          if (!bc.business) bc.business = {};
+          if (bizData.nombre && !bc.business.nombre) bc.business.nombre = bizData.nombre;
+          if (bizData.direccion) bc.business.ubicacion = bizData.direccion;
+          if (bizData.telefono) bc.business.telefono = bizData.telefono;
+          if (bizData.email) bc.business.email = bizData.email;
+          if (bizData.redes) bc.business.redes = Object.entries(bizData.redes).map(([k, v]) => `${k}: ${v}`).join(', ');
+          if (bizData.descripcion && !bc.business.descripcion_corta) bc.business.descripcion_corta = bizData.descripcion;
+          if (bizData.horarios) {
+            if (!bc.horarios) bc.horarios = {};
+            bc.horarios.detectado = bizData.horarios;
+          }
+          bc.business.sitio_web = url;
+          await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
+          console.log(`[SCRAPE] Business data: ${Object.keys(bizData).filter(k => (bizData as any)[k]).join(', ')}`);
+        }
+      }
+    } catch (err) { console.error('[SCRAPE] Business data error:', err); }
+
+    // 2. Páginas institucionales (envíos, pagos, cambios, FAQ, contacto)
+    await setProgress('Buscando páginas de info (envíos, pagos, etc.)...');
+    try {
+      // sitemapUrls puede no existir si usamos el path de Firecrawl
+      let sitemapUrlsForInst: string[] = [];
+      try { sitemapUrlsForInst = await fetchSitemapUrls(url); } catch {}
+      const allSiteUrls = [...new Set([...sitemapUrlsForInst, ...pagesToScrape.map(p => p.url)])];
+      const instPages = await scrapeInstitutionalPages(allSiteUrls, url);
+
+      for (const page of instPages) {
+        const pageId = `${page.type}_${Date.now()}`;
+        await putItem({
+          PK: `TENANT#${tenantId}`, SK: `SITEPAGE#${pageId}`,
+          tenantId, type: page.type, url: page.url,
+          content: page.content, keywords: page.keywords,
+          createdAt: now,
+        });
+      }
+      console.log(`[SCRAPE] Institutional pages: ${instPages.length}`);
+    } catch (err) { console.error('[SCRAPE] Institutional pages error:', err); }
+
+    // 3. Variantes con stock real (muestra de 20 productos)
+    await setProgress('Verificando talles y stock...');
+    try {
+      const productsWithUrls = productList.filter(p => p.pageUrl && p.pageUrl.startsWith('http')).slice(0, 20);
+      const variantResults = await Promise.allSettled(
+        productsWithUrls.map(async p => {
+          const variants = await getProductVariants(p.pageUrl);
+          if (variants.length > 0) {
+            const sizes = variants.map(v => v.size).filter(Boolean);
+            const outOfStock = variants.filter(v => !v.available).map(v => v.size);
+            await putItem({
+              ...p, sizes, outOfStockSizes: outOfStock,
+              stockChecked: true, stockCheckedAt: now,
+            });
+            return { name: p.name, sizes: sizes.length, outOfStock: outOfStock.length };
+          }
+          return null;
+        })
+      );
+      const updated = variantResults.filter(r => r.status === 'fulfilled' && r.value).length;
+      console.log(`[SCRAPE] Variants: ${updated}/${productsWithUrls.length} products updated with real stock`);
+    } catch (err) { console.error('[SCRAPE] Variants error:', err); }
 
     console.log(`[SCRAPE] Done: ${productList.length} products from ${pagesToScrape.length} pages`);
     await putItem({ ...keys.scraperJob(tenantId), tenantId, url, status: 'done', productsCount: productList.length, pagesScanned: pagesToScrape.length, progress: `${productList.length} productos relevados`, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
