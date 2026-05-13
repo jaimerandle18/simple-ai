@@ -339,9 +339,9 @@ function chooseModel(complexity: MessageComplexity): string {
 
 function chooseMaxRounds(complexity: MessageComplexity): number {
   if (complexity === 'trivial') return 0;     // sin tools
-  if (complexity === 'followup') return 2;    // puede necesitar agregar al carrito
+  if (complexity === 'followup') return 3;    // carrito: agregar + generar link
   if (complexity === 'image') return 3;       // puede necesitar buscar
-  return 4;                                   // new_query (carrito puede necesitar varias rondas)
+  return 5;                                   // new_query (carrito: buscar + agregar varios + link)
 }
 
 async function generateResponse(
@@ -670,37 +670,51 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
               };
               const cookieStr = () => Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
 
-              // Add each item to cart
+              // Get session first
+              const homeRes = await fetch(baseUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+              parseCookies(homeRes);
+
+              // Add each item via AJAX (X-Requested-With header is key)
+              let addedCount = 0;
+              const failedItems: string[] = [];
               for (const item of cart) {
                 if (!item.variantId) continue;
                 const tnProductId = item.tnProductId || (catalog.find(p => p.name.toLowerCase() === item.productName.toLowerCase()) as any)?.tnProductId;
-                if (!tnProductId) { console.warn(`[CART] No tnProductId for ${item.productName}, skipping`); continue; }
+                if (!tnProductId) { console.warn(`[CART] No tnProductId for ${item.productName}, skipping`); failedItems.push(item.productName); continue; }
 
                 const addRes = await fetch(`${baseUrl}/comprar/`, {
                   method: 'POST',
                   headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                    'User-Agent': 'Mozilla/5.0',
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Origin': baseUrl,
-                    'Referer': `${baseUrl}/productos/`,
-                    ...(cookieStr() ? { 'Cookie': cookieStr() } : {}),
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Cookie': cookieStr(),
                   },
-                  body: `add_to_cart=${tnProductId}&variant_id=${item.variantId}&quantity=${item.cantidad}`,
-                  redirect: 'manual',
+                  body: `add_to_cart=${tnProductId}&variant_id=${item.variantId}&quantity=${item.cantidad}&add_to_cart_enhanced=1${item.color ? '&variation%5B0%5D=' + encodeURIComponent(item.color) : ''}${item.talle ? '&variation%5B1%5D=' + encodeURIComponent(item.talle) : ''}`,
                 });
                 parseCookies(addRes);
-                console.log(`[CART] Added ${item.productName} (tnProd=${tnProductId}, variant=${item.variantId}) → ${addRes.status}, cookies=${Object.keys(cookies).length}`);
+                try {
+                  const json = await addRes.json();
+                  if (json.success) {
+                    addedCount++;
+                    console.log(`[CART] Added ${item.productName} (tnProd=${tnProductId}, variant=${item.variantId}) → OK`);
+                  } else {
+                    failedItems.push(`${item.productName} (${json.error_code || 'error'})`);
+                    console.log(`[CART] FAILED ${item.productName} → ${json.error_code}`);
+                  }
+                } catch {
+                  console.log(`[CART] Added ${item.productName} → status=${addRes.status}`);
+                  addedCount++;
+                }
               }
 
-              // Get checkout URL
-              if (Object.keys(cookies).length > 0) {
+              // Get checkout URL (only if at least 1 product was added)
+              if (addedCount > 0 && Object.keys(cookies).length > 0) {
                 const checkoutRes = await fetch(`${baseUrl}/comprar/`, {
                   method: 'POST',
                   headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                    'User-Agent': 'Mozilla/5.0',
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'Origin': baseUrl,
-                    'Referer': `${baseUrl}/comprar/`,
                     'Cookie': cookieStr(),
                   },
                   body: 'go_to_checkout=1',
@@ -725,10 +739,19 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
               console.warn('[CART] Fallback to individual links');
             }
 
-            toolResults.push({
-              type: 'tool_result', tool_use_id: toolUse.id,
-              content: `Link de compra generado con el carrito pre-cargado. Mandalo al cliente:\n${checkoutUrl}\n\nResumen: ${cart.length} productos, total $${total.toLocaleString('es-AR')}\n\nDecile: "Toca aca para pagar, ya esta todo cargado, solo confirma y paga."`,
-            });
+            const failMsg = failedItems.length > 0 ? `\n\nATENCION: estos productos NO se pudieron agregar porque no tienen stock en la web: ${failedItems.join(', ')}. Avisale al cliente.` : '';
+
+            if (addedCount === 0 && failedItems.length > 0) {
+              toolResults.push({
+                type: 'tool_result', tool_use_id: toolUse.id,
+                content: `No se pudo generar el link de compra. Todos los productos del carrito estan sin stock en la web: ${failedItems.join(', ')}. Decile al cliente que lamentablemente no hay stock disponible en este momento.`,
+              });
+            } else {
+              toolResults.push({
+                type: 'tool_result', tool_use_id: toolUse.id,
+                content: `Link de compra generado con ${addedCount} productos pre-cargados. Mandalo al cliente:\n${checkoutUrl}\n\nResumen: ${addedCount} productos, total $${total.toLocaleString('es-AR')}\n\nDecile: "Toca aca para pagar, ya esta todo cargado, solo confirma y paga."${failMsg}`,
+              });
+            }
           }
         }
       }
