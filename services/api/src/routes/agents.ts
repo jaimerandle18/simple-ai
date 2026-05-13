@@ -58,17 +58,37 @@ function searchCatalog(query: string, catalog: any[], categoria?: string): any[]
     .slice(0, 6);
 }
 
-const DEFAULT_CAPTION_TEMPLATE = '*{nombre}*\n{marca} | {precio}';
-
-function buildCaption(template: string | undefined, p: any): string {
-  return (template || DEFAULT_CAPTION_TEMPLATE)
-    .replace(/{nombre}/g, p.name || '')
-    .replace(/{precio}/g, p.price ? `$${Number(p.price).toLocaleString('es-AR')}` : '')
-    .replace(/{marca}/g, p.brand || '')
-    .replace(/{descripcion}/g, (p.description || '').slice(0, 120))
-    .replace(/{categoria}/g, p.category || '')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
+function buildCaption(p: any, captionCfg?: any): string {
+  const cfg = captionCfg || {};
+  const order: string[] = cfg.caption_order || ['price', 'brand', 'category', 'description', 'sizes', 'link'];
+  const lines: string[] = [`*${p.name}*`];
+  for (const key of order) {
+    switch (key) {
+      case 'price':
+        if (cfg.caption_show_price !== false && p.priceNum) lines.push(`$${Number(p.priceNum).toLocaleString('es-AR')}`);
+        break;
+      case 'brand':
+        if (cfg.caption_show_brand && p.brand) lines.push(p.brand);
+        break;
+      case 'category':
+        if (cfg.caption_show_category && p.category) lines.push(p.category);
+        break;
+      case 'description':
+        if (cfg.caption_show_description && p.description) {
+          const dot = p.description.indexOf('.');
+          lines.push(dot > 0 ? p.description.slice(0, dot + 1) : p.description.slice(0, 120));
+        }
+        break;
+      case 'sizes':
+        if (cfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
+        break;
+      case 'link':
+        if (cfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
+        break;
+    }
+  }
+  if (cfg.caption_extra_text) { lines.push(''); lines.push(cfg.caption_extra_text); }
+  return lines.join('\n');
 }
 
 function formatProductsYAML(products: any[]): string {
@@ -718,7 +738,7 @@ ${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto
             if (recentNorm.has(p.name.toLowerCase().trim())) continue;
             const nameWords = p.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3 && !stopW.has(w));
             if (nameWords.some((w: string) => replyLower.includes(w))) {
-              images.push({ url: p.imageUrl, caption: buildCaption(agentCfg.captionTemplate, p), name: p.name });
+              images.push({ url: p.imageUrl, caption: buildCaption(p, (agent as any)?.onboardingV2), name: p.name });
             }
           }
 
@@ -955,6 +975,7 @@ Escribí cómo hubiese respondido el agente CORRECTAMENTE aplicando las reglas a
         description: p.description,
         imageUrl: p.imageUrl,
         sizes: p.sizes,
+        pageUrl: p.pageUrl,
       }));
     return json({ products, total: products.length });
   }

@@ -1101,9 +1101,43 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       if (imagesToSend.length >= 3) break;
     }
 
+    // Build caption from onboarding config (or fallback to default)
+    const captionCfg = (agent as any)?.onboardingV2 || {};
+    const captionOrder: string[] = captionCfg.caption_order || ['price', 'brand', 'category', 'description', 'sizes', 'link'];
+    const buildProductCaption = (p: any): string => {
+      const bold = adapter.supportsMarkdown() ? `*${p.name}*` : p.name;
+      const lines: string[] = [bold];
+      for (const key of captionOrder) {
+        switch (key) {
+          case 'price':
+            if (captionCfg.caption_show_price !== false && p.priceNum) lines.push(`$${Number(p.priceNum).toLocaleString('es-AR')}`);
+            break;
+          case 'brand':
+            if (captionCfg.caption_show_brand && p.brand) lines.push(p.brand);
+            break;
+          case 'category':
+            if (captionCfg.caption_show_category && p.category) lines.push(p.category);
+            break;
+          case 'description':
+            if (captionCfg.caption_show_description && p.description) {
+              const dot = p.description.indexOf('.');
+              lines.push(dot > 0 ? p.description.slice(0, dot + 1) : p.description.slice(0, 120));
+            }
+            break;
+          case 'sizes':
+            if (captionCfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
+            break;
+          case 'link':
+            if (captionCfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
+            break;
+        }
+      }
+      if (captionCfg.caption_extra_text) { lines.push(''); lines.push(captionCfg.caption_extra_text); }
+      return lines.join('\n');
+    };
+
     for (const p of imagesToSend) {
-      const captionBold = adapter.supportsMarkdown() ? `*${p.name}*` : p.name;
-      const caption = `${captionBold}\n${p.brand ? `${p.brand} | ` : ''}$${(p.priceNum || 0).toLocaleString('es-AR')}`;
+      const caption = buildProductCaption(p);
       await sendImage(p.imageUrl, caption);
       const imgNow = new Date().toISOString();
       const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

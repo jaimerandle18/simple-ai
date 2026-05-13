@@ -51,6 +51,7 @@ export const SECTIONS = [
   { id: 'payment', label: 'Medios de pago', order: 4 },
   { id: 'shipping', label: 'Envios', order: 5 },
   { id: 'policies', label: 'Politicas', order: 6 },
+  { id: 'caption', label: 'Epigrafe de productos', order: 9 },
   { id: 'promotions', label: 'Promociones', order: 7 },
   { id: 'escalation', label: 'Escalamiento', order: 8 },
 ] as const;
@@ -641,6 +642,28 @@ const ESCALATION_FIELDS: FieldDefinition[] = [
 ];
 
 // ============================================================
+// SECCION 9: EPIGRAFE DE PRODUCTOS
+// ============================================================
+const CAPTION_FIELDS: FieldDefinition[] = [
+  { id: 'caption_show_price', section: 'caption', label: 'Mostrar precio', type: 'toggle', required: false },
+  { id: 'caption_show_brand', section: 'caption', label: 'Mostrar marca', type: 'toggle', required: false },
+  { id: 'caption_show_category', section: 'caption', label: 'Mostrar categoria', type: 'toggle', required: false },
+  { id: 'caption_show_description', section: 'caption', label: 'Mostrar descripcion', type: 'toggle', required: false },
+  { id: 'caption_show_sizes', section: 'caption', label: 'Mostrar talles', type: 'toggle', required: false },
+  { id: 'caption_show_link', section: 'caption', label: 'Mostrar link al producto', type: 'toggle', required: false },
+  {
+    id: 'caption_extra_text', section: 'caption', label: 'Texto fijo adicional',
+    type: 'ai_text', required: false,
+    aiContext: {
+      description: 'Texto que se agrega siempre al final del epigrafe de cada producto en WhatsApp',
+      examples: ['10% off con transferencia!', 'Envio gratis a todo el pais', '3 cuotas sin interes'],
+      maxLength: 150,
+    },
+  },
+  { id: 'caption_order', section: 'caption', label: 'Orden de campos', type: 'simple_text', required: false },
+];
+
+// ============================================================
 // EXPORT COMPLETO
 // ============================================================
 export const FIELDS_CATALOG: FieldDefinition[] = [
@@ -652,6 +675,7 @@ export const FIELDS_CATALOG: FieldDefinition[] = [
   ...POLICIES_FIELDS,
   ...PROMOTIONS_FIELDS,
   ...ESCALATION_FIELDS,
+  ...CAPTION_FIELDS,
 ];
 
 export function getFieldsForSection(sectionId: string): FieldDefinition[] {

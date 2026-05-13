@@ -36,6 +36,7 @@ export async function handleOnboardingV2(event: APIGatewayProxyEventV2) {
       currentSection,
       sections: SECTIONS,
       fields: FIELDS_CATALOG,
+      sectionsState: agent?.sectionsState || {},
       isComplete: completedSections.length === SECTIONS.length,
     });
   }
@@ -145,9 +146,14 @@ export async function handleOnboardingV2(event: APIGatewayProxyEventV2) {
     const completedSections = getCompletedSections(config);
     const nextSection = getNextSection(completedSections);
 
+    // Mark section as completed
+    const sectionsState = { ...(agent.sectionsState || {}) };
+    sectionsState[sectionId] = 'completed';
+
     await putItem({
       ...agent,
       onboardingV2: config,
+      sectionsState,
       updatedAt: new Date().toISOString(),
     });
 
@@ -165,8 +171,34 @@ export async function handleOnboardingV2(event: APIGatewayProxyEventV2) {
       return error('fieldId and userInput are required', 400);
     }
 
-    const field = getField(fieldId);
-    if (!field) return error(`Field "${fieldId}" not found`, 404);
+    let field = getField(fieldId);
+
+    // Dynamic fields (e.g. caption_description_summary) get a synthetic definition
+    if (!field) {
+      if (fieldId === 'caption_extra_text') {
+        field = {
+          id: 'caption_extra_text', section: 'caption', label: 'Texto fijo adicional',
+          type: 'ai_text', required: false,
+          aiContext: {
+            description: 'Texto que se agrega siempre al final del epigrafe de cada producto en WhatsApp (ej: promo, envio gratis)',
+            examples: ['10% off con transferencia!', 'Envio gratis a todo el pais', '3 cuotas sin interes'],
+            maxLength: 150,
+          },
+        };
+      } else if (fieldId === 'caption_description_summary') {
+        field = {
+          id: 'caption_description_summary', section: 'caption', label: 'Resumen de descripcion',
+          type: 'ai_text', required: false,
+          aiContext: {
+            description: 'Resumen MUY corto de la descripcion de un producto para usar como epigrafe debajo de una foto en WhatsApp. Sacale lo que no aporta (ej: "compra online", "hace tu pedido", medidas del modelo). Deja solo material, corte y caracteristica principal. Maximo 60 caracteres.',
+            examples: ['Sweater cuello alto, bordado a tono, cierre con logo', 'Remera boxy fit 100% algodon, corte oversize', 'Traje de bano microfibra, secado rapido, cintura elastica'],
+            maxLength: 80,
+          },
+        };
+      } else {
+        return error(`Field "${fieldId}" not found`, 404);
+      }
+    }
 
     if (field.type !== 'ai_text') {
       return error(`Field "${fieldId}" does not support AI improvement`, 400);
