@@ -1379,10 +1379,22 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     if (contactMemory) agentCfg._contactMemory = contactMemory;
 
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
-    const trivial = isTrivialMessage(combinedMessage);
     const hasRecent = recentProducts.length > 0;
+    const hasCart = existingCart.length > 0;
+    let trivial = isTrivialMessage(combinedMessage);
     const recentNames = recentProducts.map((p: any) => p.name);
     const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentNames);
+
+    // "dale", "si", "listo" with recent products or cart = followup, not trivial
+    // These are purchase confirmations that need tool access
+    if (trivial && (hasRecent || hasCart)) {
+      const isConfirmation = /^(dale|si|sí|listo|ok|okey|perfecto|genial|joya|buenisimo|excelente)\s*[!.?]*$/i.test(combinedMessage.trim());
+      const isSaludo = /^(hola|holaa+|hi|hey|buenas|buen[oa]s?\s*d[ií]as?|buenas\s*tardes|buenas\s*noches|que\s*tal)\s*[!.?]*$/i.test(combinedMessage.trim());
+      if (isConfirmation && !isSaludo) {
+        trivial = false;
+        console.log(`[CLASSIFY] "${combinedMessage}" reclassified from trivial to followup (hasRecent=${hasRecent}, hasCart=${hasCart})`);
+      }
+    }
 
     if (trivial) {
       const isSaludo = /^(hola|holaa+|hi|hey|buenas|buen[oa]s?\s*d[ií]as?|buenas\s*tardes|buenas\s*noches|que\s*tal)\s*[!.?]*$/i.test(combinedMessage.trim());
