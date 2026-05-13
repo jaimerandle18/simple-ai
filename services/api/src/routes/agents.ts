@@ -58,6 +58,19 @@ function searchCatalog(query: string, catalog: any[], categoria?: string): any[]
     .slice(0, 6);
 }
 
+const DEFAULT_CAPTION_TEMPLATE = '*{nombre}*\n{marca} | {precio}';
+
+function buildCaption(template: string | undefined, p: any): string {
+  return (template || DEFAULT_CAPTION_TEMPLATE)
+    .replace(/{nombre}/g, p.name || '')
+    .replace(/{precio}/g, p.price ? `$${Number(p.price).toLocaleString('es-AR')}` : '')
+    .replace(/{marca}/g, p.brand || '')
+    .replace(/{descripcion}/g, (p.description || '').slice(0, 120))
+    .replace(/{categoria}/g, p.category || '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
 function formatProductsYAML(products: any[]): string {
   if (products.length === 0) return '(ninguno en contexto, usá buscar_productos)';
   let block = '';
@@ -896,7 +909,7 @@ ${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto
             if (recentNorm.has(p.name.toLowerCase().trim())) continue;
             const nameWords = p.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3 && !stopW.has(w));
             if (nameWords.some((w: string) => replyLower.includes(w))) {
-              images.push({ url: p.imageUrl, caption: `*${p.name}*\n${p.brand ? `${p.brand} | ` : ''}${p.price || ''}`, name: p.name });
+              images.push({ url: p.imageUrl, caption: buildCaption(agentCfg.captionTemplate, p), name: p.name });
             }
           }
 

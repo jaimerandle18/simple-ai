@@ -165,11 +165,14 @@ interface AttachedFile {
   uploadedAt: string;
 }
 
+const DEFAULT_CAPTION = '*{nombre}*\n{marca} | {precio}';
+
 interface AgentConfig {
   websiteUrl: string;
   websiteScraped: boolean;
   productsCount: number;
   attachedFiles?: AttachedFile[];
+  captionTemplate?: string;
 }
 
 interface ScheduleConfig {
@@ -208,6 +211,9 @@ export default function ScraperPage() {
   const [scrapeResult, setScrapeResult] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState('');
+  const [captionTemplate, setCaptionTemplate] = useState(DEFAULT_CAPTION);
+  const [savingCaption, setSavingCaption] = useState(false);
+  const [captionMsg, setCaptionMsg] = useState('');
 
   const [schedule, setSchedule] = useState<ScheduleConfig>({ configured: false });
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -238,6 +244,7 @@ export default function ScraperPage() {
           websiteScraped: scheduleData.websiteScraped ?? baseConfig.websiteScraped ?? false,
           productsCount: scheduleData.productsCount || baseConfig.productsCount || 0,
         });
+        setCaptionTemplate(baseConfig.captionTemplate || DEFAULT_CAPTION);
         setSchedule(scheduleData);
         if (scheduleData.schedule) {
           setScheduleEnabled(scheduleData.schedule.enabled);
@@ -319,6 +326,25 @@ export default function ScraperPage() {
       setRunResult('Error: ' + err.message);
     }
     setRunning(false);
+  };
+
+  const handleSaveCaption = async () => {
+    if (!tenantId) return;
+    setSavingCaption(true);
+    setCaptionMsg('');
+    try {
+      const existing = await api('/agents/main', { tenantId });
+      await api('/agents/main', {
+        method: 'PUT',
+        tenantId,
+        body: { agentConfig: { ...(existing.agentConfig || {}), captionTemplate } },
+      });
+      setCaptionMsg('Guardado');
+      setTimeout(() => setCaptionMsg(''), 2000);
+    } catch (err: any) {
+      setCaptionMsg('Error: ' + err.message);
+    }
+    setSavingCaption(false);
   };
 
   const handleSaveSchedule = async () => {
@@ -577,6 +603,31 @@ export default function ScraperPage() {
             </div>
           </div>
         )}
+
+        {/* Epígrafe de productos */}
+        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+          <h2 className="text-base font-semibold text-gray-900 mb-1">Epígrafe de productos</h2>
+          <p className="text-xs text-gray-500 mb-4">Texto que aparece bajo la imagen cuando el agente muestra un producto. Usá <code className="bg-gray-100 px-1 rounded text-xs">{'{nombre}'}</code>, <code className="bg-gray-100 px-1 rounded text-xs">{'{precio}'}</code>, <code className="bg-gray-100 px-1 rounded text-xs">{'{marca}'}</code>, <code className="bg-gray-100 px-1 rounded text-xs">{'{descripcion}'}</code>, <code className="bg-gray-100 px-1 rounded text-xs">{'{categoria}'}</code>. Usá <code className="bg-gray-100 px-1 rounded text-xs">*texto*</code> para negrita.</p>
+          <textarea
+            value={captionTemplate}
+            onChange={e => setCaptionTemplate(e.target.value)}
+            rows={3}
+            className="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 resize-none"
+            placeholder={DEFAULT_CAPTION}
+          />
+          <div className="flex items-center gap-3 mt-3">
+            <button
+              onClick={handleSaveCaption}
+              disabled={savingCaption}
+              className="bg-gradient-to-r from-primary-600 to-secondary-600 text-white text-sm font-medium py-2 px-5 rounded-lg hover:from-primary-700 hover:to-secondary-700 transition-all disabled:opacity-50"
+            >
+              {savingCaption ? 'Guardando...' : 'Guardar'}
+            </button>
+            {captionMsg && (
+              <span className={`text-sm ${captionMsg.startsWith('Error') ? 'text-red-600' : 'text-emerald-600'}`}>{captionMsg}</span>
+            )}
+          </div>
+        </div>
 
         {/* Archivos */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
