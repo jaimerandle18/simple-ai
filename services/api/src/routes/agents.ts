@@ -278,7 +278,7 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
       scrapePage(url, { waitFor: 1500 }),
       mapSite(url, 500),
     ]);
-    if (!mainPage) throw new Error('No se pudo acceder a la web.');
+    if (!mainPage && siteUrls.length === 0) throw new Error('No se pudo acceder a la web.');
     console.log(`[SCRAPE] Site map: ${siteUrls.length} URLs`);
 
     const baseHostname = new URL(url).hostname;
@@ -328,7 +328,7 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
     if (pagesToScrape.length < 3) {
       const fallbackRes = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
-        messages: [{ role: 'user', content: `URL: ${url}\n\nContenido:\n${mainPage.content.slice(0, 10000)}\n\nEncontrá TODAS las URLs de páginas de listado de productos. Devolvé JSON: {"urls": ["url1", "url2"], "isProductPage": bool}. Solo URLs completas (https://...).` }],
+        messages: [{ role: 'user', content: `URL: ${url}\n\nContenido:\n${mainPage?.content.slice(0, 10000) ?? ''}\n\nEncontrá TODAS las URLs de páginas de listado de productos. Devolvé JSON: {"urls": ["url1", "url2"], "isProductPage": bool}. Solo URLs completas (https://...).` }],
       });
       try {
         const fb = JSON.parse((fallbackRes.content[0] as any).text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
@@ -339,7 +339,7 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
       } catch {}
     }
 
-    const homepageHasProducts = /\$\s*[\d.,]+|precio|price|agregar.*carrito|add.*cart/i.test(mainPage.content);
+    const homepageHasProducts = mainPage ? /\$\s*[\d.,]+|precio|price|agregar.*carrito|add.*cart/i.test(mainPage.content) : false;
     if (homepageHasProducts && !seenUrls.has(url)) { pagesToScrape.unshift({ url, category: '' }); seenUrls.add(url); }
     if (pagesToScrape.length === 0) pagesToScrape.push({ url, category: '' });
 
@@ -407,7 +407,7 @@ CRÍTICO: incluir ABSOLUTAMENTE TODOS sin excepción.`;
       const batch = pagesToScrape.slice(i, i + 5);
       const results = await Promise.allSettled(batch.map(async (page) => {
         const firstContent = page.url === url
-          ? mainPage.content
+          ? (mainPage?.content || '')
           : (await scrapePage(page.url, { waitFor: 1500 }))?.content || '';
         if (firstContent.length < 100) return { products: [], businessInfo: '', pageUrl: page.url };
         const fullContent = await scrapeAllPages(page.url, firstContent);
@@ -490,7 +490,7 @@ CRÍTICO: incluir ABSOLUTAMENTE TODOS sin excepción.`;
 
     try {
       const samplePage = pagesToScrape[0];
-      const sampleMarkdown = (samplePage?.url === url ? mainPage.content : (await scrapePage(samplePage?.url || url, { waitFor: 1500 }))?.content) || mainPage.content;
+      const sampleMarkdown = (samplePage?.url === url ? mainPage?.content : (await scrapePage(samplePage?.url || url, { waitFor: 1500 }))?.content) || mainPage?.content || '';
       const extractorCode = await generateExtractorCode(sampleMarkdown, productList.slice(0, 15));
       const existingCfg = await getItem(keys.scraperConfig(tenantId));
       await putItem({
