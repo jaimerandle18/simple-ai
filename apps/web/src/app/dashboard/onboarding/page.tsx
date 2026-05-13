@@ -611,39 +611,6 @@ export default function OnboardingPage() {
         </div>
       </div>
 
-      {/* Pending changes banner — shows after saving any section */}
-      {hasPendingChanges && (
-        <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 bg-primary-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-[slideUp_0.3s_ease-out]">
-          <p className="text-sm">{wasCompleted ? 'Queres actualizar el agente con los cambios?' : 'Queres activar el agente?'}</p>
-          <button
-            onClick={async () => {
-              if (!tenantId) return;
-              setReactivating(true);
-              try {
-                await api('/onboarding/v2/complete', { method: 'POST', tenantId });
-                showToast('success', wasCompleted ? 'Agente actualizado!' : 'Agente activado!');
-                setHasPendingChanges(false);
-                setWasCompleted(true);
-                window.dispatchEvent(new Event('config-changed'));
-              } catch (err: any) {
-                showToast('error', err.message || 'Error al actualizar');
-              }
-              setReactivating(false);
-            }}
-            disabled={reactivating}
-            className="bg-white text-primary-700 px-4 py-1.5 rounded-lg text-sm font-semibold hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1.5 shrink-0"
-          >
-            {reactivating ? (
-              <div className="w-3.5 h-3.5 border-2 border-primary-600 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
-            )}
-            Activar
-          </button>
-          <button onClick={() => setHasPendingChanges(false)} className="text-white/60 hover:text-white text-lg leading-none">&times;</button>
-        </div>
-      )}
-
       {/* Toasts */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
         {toasts.map(t => (
