@@ -2,7 +2,7 @@ import { SQSEvent } from 'aws-lambda';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
-import { getItem, putItem, queryItems, queryByGSI, keys } from './lib/dynamo-helpers';
+import { getItem, putItem, queryItems, queryAllItems, queryByGSI, deleteItem, batchDeleteItems, keys } from './lib/dynamo-helpers';
 import { getCachedCatalog } from './lib/catalog-loader';
 import sharp from 'sharp';
 import type { EnrichedProduct } from './lib/types';
@@ -945,7 +945,12 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
   // 13. Comando /reset
   if (combinedMessage.trim().toLowerCase() === '/reset') {
-    const resetMsg = 'Conversación reiniciada. Hola! Contame qué buscás.';
+    const allMsgs = await queryAllItems(`CONV#${conversationId}`, 'MSG#');
+    if (allMsgs.length > 0) {
+      await batchDeleteItems(allMsgs.map(m => ({ PK: m.PK, SK: m.SK })));
+    }
+    await deleteItem(keys.contactMemory(tenantId, externalUserId));
+    const resetMsg = 'Conversación reiniciada';
     await sendReply(resetMsg);
     const resetNow = new Date().toISOString();
     const resetId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

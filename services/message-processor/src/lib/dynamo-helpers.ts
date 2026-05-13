@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 
 const client = new DynamoDBClient({});
 export const db = DynamoDBDocumentClient.from(client, {
@@ -42,6 +42,38 @@ export async function queryItems(pk: string, skPrefix?: string, options?: { limi
   if (options?.limit) params.Limit = options.limit;
   const result = await db.send(new QueryCommand(params));
   return result.Items ?? [];
+}
+
+export async function deleteItem(key: { PK: string; SK: string }) {
+  await db.send(new DeleteCommand({ TableName: TABLE_NAME, Key: key }));
+}
+
+export async function batchDeleteItems(keys: { PK: string; SK: string }[]) {
+  for (let i = 0; i < keys.length; i += 25) {
+    const batch = keys.slice(i, i + 25);
+    await db.send(new BatchWriteCommand({
+      RequestItems: {
+        [TABLE_NAME]: batch.map(k => ({ DeleteRequest: { Key: k } })),
+      },
+    }));
+  }
+}
+
+export async function queryAllItems(pk: string, skPrefix?: string) {
+  const items: any[] = [];
+  let lastKey: Record<string, any> | undefined;
+  do {
+    const params: any = {
+      TableName: TABLE_NAME,
+      KeyConditionExpression: skPrefix ? 'PK = :pk AND begins_with(SK, :sk)' : 'PK = :pk',
+      ExpressionAttributeValues: skPrefix ? { ':pk': pk, ':sk': skPrefix } : { ':pk': pk },
+      ExclusiveStartKey: lastKey,
+    };
+    const result = await db.send(new QueryCommand(params));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+  return items;
 }
 
 export async function queryByGSI(indexName: string, pkName: string, pkValue: string) {
