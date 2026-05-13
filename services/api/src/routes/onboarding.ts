@@ -360,6 +360,35 @@ export async function handleOnboarding(event: APIGatewayProxyEventV2) {
         if (res.stop_reason === 'end_turn') {
           const reply = textBlock?.text || await generateDynamicResponse(updatedConfig, updatedSections, msgs);
           console.log(`[ONBOARDING] end_turn reply: "${reply.slice(0, 100)}"`);
+
+          // Auto-extract: si Haiku no llamó a save_section, extraer datos del chat automáticamente
+          try {
+            const extractRes = await anthropic.messages.create({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 500,
+              system: `Extraé datos del negocio de esta conversación. Devolvé SOLO JSON con los campos que encontraste. Secciones posibles: business (nombre, rubro, tipo_productos, ubicacion, sitio_web, redes, publico_objetivo, calificadores, especialidad), bot_persona (nombre, tono, saludo_inicial, emojis_permitidos, max_lineas), horarios, pago, envio, politicas, promos_vigentes, escalamiento. Si no hay datos nuevos, devolvé {}. NO inventes datos.`,
+              messages: [{ role: 'user', content: `Conversación:\n${historyMsgs.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}\nuser: ${message}\nassistant: ${reply}\n\nConfig actual:\n${JSON.stringify(updatedConfig)}` }],
+            });
+            const extractText = extractRes.content[0]?.type === 'text' ? extractRes.content[0].text : '{}';
+            const extracted = JSON.parse(extractText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+
+            // Merge extracted data
+            for (const [section, data] of Object.entries(extracted)) {
+              if (data && typeof data === 'object' && Object.keys(data as any).length > 0) {
+                updatedConfig[section] = { ...(updatedConfig[section] || {}), ...(data as any) };
+                console.log(`[ONBOARDING] Auto-extracted ${section}: ${Object.keys(data as any).join(', ')}`);
+              }
+            }
+
+            // Persist
+            if (agent) {
+              agent = { ...agent, businessConfig: updatedConfig, completedSections: getCompletedSections(updatedConfig), updatedAt: new Date().toISOString() };
+              await putItem(agent);
+            }
+          } catch (err) {
+            console.error('[ONBOARDING] Auto-extract failed:', err);
+          }
+
           return await saveAndReturn(agent, updatedConfig, updatedSections, historyMsgs, message, reply, tenantId);
         }
 
