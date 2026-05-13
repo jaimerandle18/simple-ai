@@ -421,7 +421,7 @@ export default function ScraperPage() {
             <h2 className="text-base font-semibold text-gray-900">Escanear tu web</h2>
             {(config.websiteScraped || config.productsCount > 0 || schedule.configured) && (
               <button
-                onClick={() => setShowCatalog(true)}
+                onClick={() => { setCatalogVersion(v => v + 1); setShowCatalog(true); }}
                 className="flex items-center gap-1.5 text-sm text-primary-600 font-medium hover:text-primary-700 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
