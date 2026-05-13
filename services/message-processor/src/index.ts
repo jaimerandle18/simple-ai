@@ -311,14 +311,24 @@ function shouldSendPhoto(product: EnrichedProduct, aiResponse: string, allProduc
 
   // Match SECUNDARIO: 2+ palabras distintivas
   if (distinctiveMatchCount >= 2) {
-    if (product.attributes) {
-      const potencia = product.attributes.potencia_w;
-      const voltaje = product.attributes.voltaje_v;
-      if (potencia && responseLower.includes(`${potencia}w`)) { console.log(`[FILTER] "${product.name}" → PASS (2words+spec)`); return true; }
-      if (voltaje && responseLower.includes(`${voltaje}v`)) { console.log(`[FILTER] "${product.name}" → PASS (2words+spec)`); return true; }
-    }
     console.log(`[FILTER] "${product.name}" → PASS (2+ distinctive)`);
     return true;
+  }
+
+  // Match TERCIARIO: 1 palabra distintiva es suficiente si el nombre completo
+  // (sin stop words) aparece en la respuesta — el bot nombró el producto explícitamente
+  if (distinctiveMatchCount >= 1) {
+    // Check if the full product name (lowercased) appears in response
+    const nameLower = product.name.toLowerCase();
+    if (responseLower.includes(nameLower)) {
+      console.log(`[FILTER] "${product.name}" → PASS (full name match)`);
+      return true;
+    }
+    // Also check: if there's only 1 distinctive word total, 1 match is enough
+    if (distinctiveWords.length <= 1) {
+      console.log(`[FILTER] "${product.name}" → PASS (1 distinctive, only 1 available)`);
+      return true;
+    }
   }
 
   console.log(`[FILTER] "${product.name}" → FAIL (only ${distinctiveMatchCount} distinctive)`);
@@ -1307,6 +1317,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     console.log(`[${channel}] Sent: ${sendResult.externalMessageId}`);
 
     // Enviar imágenes de productos frescos
+    console.log(`[PHOTOS] cleanResponse for filter: "${cleanResponse.slice(0, 200)}" | freshProducts: ${freshProducts.length}`);
     const normName = (s: string) => s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
     const seenNames = new Set<string>();
     for (const p of recentProducts) seenNames.add(normName(p.name));
