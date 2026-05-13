@@ -327,6 +327,60 @@ export async function runFullScrape(tenantId: string, url: string): Promise<void
         await Promise.all(productList.slice(i, i + 25).map((item: any) => putItem(item)));
 
       console.log(`[SCRAPE] Sitemap path done: ${productList.length} products`);
+
+      // ─── ENRIQUECIMIENTO (mismo que el path principal) ───
+      await setProgress('Extrayendo info del negocio...');
+      try {
+        const bizData = await scrapeBusinessData(url);
+        if (Object.keys(bizData).length > 0) {
+          const agentItem = await getItem(keys.agent(tenantId, 'main'));
+          if (agentItem) {
+            const bc = agentItem.businessConfig || {};
+            if (!bc.business) bc.business = {};
+            if (bizData.nombre && !bc.business.nombre) bc.business.nombre = bizData.nombre;
+            if (bizData.direccion) bc.business.ubicacion = bizData.direccion;
+            if (bizData.telefono) bc.business.telefono = bizData.telefono;
+            if (bizData.email) bc.business.email = bizData.email;
+            if (bizData.redes) bc.business.redes = Object.entries(bizData.redes).map(([k, v]) => `${k}: ${v}`).join(', ');
+            if (bizData.descripcion && !bc.business.descripcion_corta) bc.business.descripcion_corta = bizData.descripcion;
+            if (bizData.horarios) { if (!bc.horarios) bc.horarios = {}; bc.horarios.detectado = bizData.horarios; }
+            bc.business.sitio_web = url;
+            await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
+            console.log(`[SCRAPE] Business data: ${Object.keys(bizData).filter(k => (bizData as any)[k]).join(', ')}`);
+          }
+        }
+      } catch (err) { console.error('[SCRAPE] Business data error:', err); }
+
+      await setProgress('Buscando páginas de info (envíos, pagos, etc.)...');
+      try {
+        const instPages = await scrapeInstitutionalPages(sitemapUrls, url);
+        for (const page of instPages) {
+          const pageId = `${page.type}_${Date.now()}`;
+          await putItem({
+            PK: `TENANT#${tenantId}`, SK: `SITEPAGE#${pageId}`,
+            tenantId, type: page.type, url: page.url,
+            content: page.content, keywords: page.keywords, createdAt: now,
+          });
+        }
+        console.log(`[SCRAPE] Institutional pages: ${instPages.length}`);
+      } catch (err) { console.error('[SCRAPE] Institutional pages error:', err); }
+
+      await setProgress('Verificando talles y stock...');
+      try {
+        const withUrls = productList.filter((p: any) => p.pageUrl?.startsWith('http')).slice(0, 20);
+        let variantsUpdated = 0;
+        for (const p of withUrls) {
+          const variants = await getProductVariants(p.pageUrl);
+          if (variants.length > 0) {
+            const sizes = variants.map(v => v.size).filter(Boolean);
+            const oos = variants.filter(v => !v.available).map(v => v.size);
+            await putItem({ ...p, sizes, outOfStockSizes: oos, stockChecked: true });
+            variantsUpdated++;
+          }
+        }
+        console.log(`[SCRAPE] Variants: ${variantsUpdated}/${withUrls.length} updated`);
+      } catch (err) { console.error('[SCRAPE] Variants error:', err); }
+
       await putItem({ ...keys.scraperJob(tenantId), tenantId, url, status: 'done', productsCount: productList.length, pagesScanned: sitemapUrls.length, progress: `${productList.length} productos relevados`, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       return;
     }
