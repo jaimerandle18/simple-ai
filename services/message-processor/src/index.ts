@@ -1429,7 +1429,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     // Build caption from onboarding config + size context
     const captionCfg = (agent as any)?.onboardingV2 || {};
     const askedSize = extractSizeFromMessage(combinedMessage);
-    const captionOrder: string[] = captionCfg.caption_order || ['price'];
+    const captionOrder: string[] = captionCfg.caption_order || ['price', 'brand', 'category', 'description', 'sizes', 'link'];
 
     const buildProductCaption = (p: any): string => {
       const bold = adapter.supportsMarkdown() ? `*${p.name}*` : p.name;
@@ -1454,11 +1454,17 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
           case 'brand':
             if (captionCfg.caption_show_brand && p.brand) lines.push(p.brand);
             break;
+          case 'category':
+            if (captionCfg.caption_show_category && p.category) lines.push(p.category);
+            break;
           case 'description':
             if (captionCfg.caption_show_description && p.description) {
               const dot = p.description.indexOf('.');
               lines.push(dot > 0 ? p.description.slice(0, dot + 1) : p.description.slice(0, 120));
             }
+            break;
+          case 'sizes':
+            if (captionCfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
             break;
           case 'link':
             if (captionCfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
