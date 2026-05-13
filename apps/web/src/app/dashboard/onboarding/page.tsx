@@ -329,14 +329,17 @@ export default function OnboardingPage() {
           : (config[f.id] ?? (f.type === 'toggle' ? false : f.type === 'multi_select' ? [] : ''));
       }
     }
+    // Also include caption_order if it exists in config (it's an array, not in catalog)
+    if (config.caption_order) fieldValues.caption_order = config.caption_order;
+
     try {
       await api('/onboarding/v2/save-section', {
         method: 'POST', tenantId,
         body: { sectionId: currentSection.id, fields: fieldValues },
       });
       showToast('success', `${currentSection.label} actualizado`);
-    } catch {
-      showToast('error', 'Error al guardar');
+    } catch (err: any) {
+      showToast('error', err.message || 'Error al guardar');
     }
     setSaving(false);
   };
