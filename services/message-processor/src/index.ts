@@ -493,7 +493,7 @@ async function generateResponse(
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
 9. ENVÍOS, PAGOS, HORARIOS, UBICACIÓN: respondé con lo que sepas. Si no tenés el dato exacto, derivá.
-10. INTENCIÓN DE COMPRA: si el cliente quiere comprar, pedile los datos necesarios.
+10. INTENCIÓN DE COMPRA: cuando el cliente quiere comprar, usa agregar_al_carrito (pedi talle/color antes si hace falta) y despues generar_link_compra. NUNCA pidas nombre, direccion ni telefono — el checkout de la web se encarga de eso.
 11. ESCALAMIENTO: si insulta o pide humano: "Te paso con alguien del equipo."
 12. FORMATO 1 PRODUCTO: si el cliente eligio un producto especifico, da detalles en el texto (material, talles disponibles, por que lo recomendas). La foto ya muestra nombre+precio en el caption, NO lo repitas en el texto. Complementa, no dupliques.
 13. NUNCA preguntes "¿te mando foto?". O nombrás el producto con datos o no lo nombrás.
@@ -1408,20 +1408,20 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const sendResult = await sendReply(cleanResponse);
     console.log(`[${channel}] Sent: ${sendResult.externalMessageId}`);
 
-    // Enviar imágenes de productos frescos
-    console.log(`[PHOTOS] cleanResponse for filter: "${cleanResponse.slice(0, 200)}" | freshProducts: ${freshProducts.length}`);
+    // Enviar imágenes de productos mencionados en la respuesta
+    const allCandidates = dedupProducts([...freshProducts, ...productsShown]);
+    console.log(`[PHOTOS] cleanResponse for filter: "${cleanResponse.slice(0, 200)}" | candidates: ${allCandidates.length}`);
     const normName = (s: string) => s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
-    const seenNames = new Set<string>();
-    for (const p of recentProducts) seenNames.add(normName(p.name));
-    const allCandidatePool = [...recentProducts, ...freshProducts];
+    const sentPhotoNames = new Set<string>();
+    const allCandidatePool = [...recentProducts, ...allCandidates];
 
     const imagesToSend: typeof freshProducts = [];
-    for (const p of freshProducts) {
+    for (const p of allCandidates) {
       const nn = normName(p.name);
-      if (seenNames.has(nn)) continue;
+      if (sentPhotoNames.has(nn)) continue;
       if (!p.imageUrl || !p.imageUrl.startsWith('http') || p.imageUrl.includes('empty-placeholder')) continue;
       if (!shouldSendPhoto(p, cleanResponse, allCandidatePool)) continue;
-      seenNames.add(nn);
+      sentPhotoNames.add(nn);
       imagesToSend.push(p);
       if (imagesToSend.length >= 3) break;
     }
