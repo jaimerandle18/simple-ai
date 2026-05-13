@@ -342,62 +342,6 @@ export async function handleOnboarding(event: APIGatewayProxyEventV2) {
     let agent = await getItem(keys.agent(tenantId, 'main'));
     let updatedConfig = { ...(agent?.businessConfig || {}) };
 
-    // Pre-fill: cargar todo lo que el scraper haya encontrado
-    if (Object.keys(updatedConfig).length === 0 || !updatedConfig.business?.nombre) {
-      try {
-        // 1. Páginas institucionales del sitio
-        const sitePages: any[] = await queryItems(`TENANT#${tenantId}`, 'SITEPAGE#', { limit: 20 });
-
-        // 2. Productos para inferir rubro
-        const products = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 20 });
-        const sourceUrl = (products[0] as any)?.sourceUrl || '';
-        const productCount = products.length;
-
-        // 3. Armar contexto para que Haiku extraiga TODO de una
-        const sitePagesText = sitePages.map((p: any) =>
-          `[${(p.type || '').toUpperCase()}] ${(p.content || '').slice(0, 2000)}`
-        ).join('\n\n');
-        const productSample = products.slice(0, 15).map((p: any) => `${p.name} - ${p.price}`).join(', ');
-
-        if (sitePagesText.length > 50 || productCount > 0) {
-          const inferRes = await anthropic.messages.create({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
-            system: `Extraé TODA la info del negocio de estas fuentes. Devolvé JSON con EXACTAMENTE esta estructura (solo campos que encuentres, no inventar):
-{
-  "business": { "nombre":"", "rubro":"", "tipo_productos":"", "ubicacion":"", "sitio_web":"", "redes":"", "telefono":"", "email":"", "publico_objetivo":"", "descripcion_corta":"" },
-  "horarios": { "lunes_viernes":"", "sabado":"", "domingo":"", "mensaje_fuera_horario":"" },
-  "pago": { "metodos":"", "descuentos":"", "cuotas":"" },
-  "envio": { "zonas":"", "servicio":"", "tiempo":"", "costo":"", "gratis_desde":"", "retiro_local":"" },
-  "politicas": { "cambios":"", "devolucion":"", "garantia":"" }
-}`,
-            messages: [{ role: 'user', content: `URL: ${sourceUrl}\nProductos (${productCount}): ${productSample}\n\nPaginas del sitio:\n${sitePagesText}` }],
-          });
-          const inferText = inferRes.content[0]?.type === 'text' ? inferRes.content[0].text : '{}';
-          const inferred = JSON.parse(inferText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-
-          // Merge cada sección
-          for (const [section, data] of Object.entries(inferred)) {
-            if (data && typeof data === 'object' && Object.keys(data as any).some(k => (data as any)[k])) {
-              updatedConfig[section] = { ...(updatedConfig[section] || {}), ...(data as any) };
-            }
-          }
-          if (sourceUrl && !updatedConfig.business?.sitio_web) {
-            if (!updatedConfig.business) updatedConfig.business = {};
-            updatedConfig.business.sitio_web = sourceUrl;
-          }
-
-          console.log(`[ONBOARDING] Pre-filled from scrape: ${Object.keys(inferred).join(', ')}`);
-
-          if (agent) {
-            agent = { ...agent, businessConfig: updatedConfig, updatedAt: new Date().toISOString() };
-            await putItem(agent);
-          }
-        }
-      } catch (err) {
-        console.error('[ONBOARDING] Pre-fill error:', err);
-      }
-    }
-
     let updatedSections: string[] = getCompletedSections(updatedConfig);
 
     const historyMsgs = (history || []) as { role: string; content: string }[];

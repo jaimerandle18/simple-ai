@@ -1047,23 +1047,6 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const contactMemory = await loadContactMemory(tenantId, externalUserId);
     if (contactMemory) agentCfg._contactMemory = contactMemory;
 
-    // Cargar info contextual del sitio (páginas institucionales)
-    try {
-      const sitePages: any[] = await queryItems(`TENANT#${tenantId}`, 'SITEPAGE#', { limit: 10 });
-      if (sitePages.length > 0) {
-        // Matchear páginas relevantes al mensaje del cliente
-        const msgLower = combinedMessage.toLowerCase();
-        const relevant = sitePages.filter((p: any) =>
-          (p.keywords || []).some((kw: string) => msgLower.includes(kw))
-        );
-        if (relevant.length > 0) {
-          agentCfg._sitePages = relevant.map((p: any) =>
-            `[${(p.type || '').toUpperCase()}]\n${(p.content || '').slice(0, 2000)}`
-          ).join('\n\n');
-        }
-      }
-    } catch {}
-
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
     const trivial = isTrivialMessage(combinedMessage);
     const hasRecent = recentProducts.length > 0;
