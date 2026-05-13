@@ -1,0 +1,19 @@
+{
+  "name": "remarketing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/trigger-detector.ts src/sender-worker.ts src/health-monitor.ts --bundle --platform=node --target=node20 --outdir=dist --external:@aws-sdk/*",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-sqs": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "typescript": "^5.5.0"
+  }
+}

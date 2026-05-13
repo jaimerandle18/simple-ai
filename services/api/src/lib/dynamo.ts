@@ -20,6 +20,12 @@ export const keys = {
   rule: (tenantId: string, ruleId: string) => ({ PK: `TENANT#${tenantId}`, SK: `RULE#${ruleId}` }),
   scraperConfig: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'SCRAPER#config' }),
   scraperJob: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'SCRAPER#job' }),
+  // Remarketing
+  campaign: (tenantId: string, campaignId: string) => ({ PK: `TENANT#${tenantId}`, SK: `CAMPAIGN#${campaignId}` }),
+  campaignSend: (campaignId: string, ts: string, phone: string) => ({ PK: `CAMPAIGN_SEND#${campaignId}`, SK: `${ts}#${phone}` }),
+  numberHealth: (tenantId: string) => ({ PK: `TENANT#${tenantId}`, SK: 'WAHA_NUMBER_HEALTH' }),
+  suppression: (tenantId: string, phone: string) => ({ PK: `TENANT#${tenantId}`, SK: `SUPPRESSION#${phone}` }),
+  remarketingMsg: (tenantId: string, phone: string, ts: string) => ({ PK: `TENANT#${tenantId}#CONTACT#${phone}`, SK: `REMARKETING_MSG#${ts}` }),
 };
 
 // Generic helpers

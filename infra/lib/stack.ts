@@ -66,6 +66,15 @@ export class SimpleAiStack extends cdk.Stack {
       visibilityTimeout: cdk.Duration.seconds(120),
     });
 
+    // SQS FIFO para remarketing (ordena envios por tenant, evita duplicados)
+    const remarketingQueue = new sqs.Queue(this, 'RemarketingQueue', {
+      queueName: `simple-ai-remarketing-${stage}.fifo`,
+      fifo: true,
+      contentBasedDeduplication: true,
+      visibilityTimeout: cdk.Duration.seconds(120),
+      retentionPeriod: cdk.Duration.days(1),
+    });
+
     // ========== EC2: Evolution API ==========
 
     // Use default VPC
@@ -210,6 +219,59 @@ COMPOSE`,
       memorySize: 512,
     });
 
+    // ========== Remarketing Lambdas ==========
+    const remarketingCode = lambda.Code.fromAsset(path.join(__dirname, '../../services/remarketing/dist'));
+
+    const remarketingTriggerLambda = new lambda.Function(this, 'RemarketingTriggerLambda', {
+      functionName: `simple-ai-remarketing-trigger-${stage}`,
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'trigger-detector.handler',
+      code: remarketingCode,
+      environment: {
+        TABLE_NAME: table.tableName,
+        REMARKETING_QUEUE_URL: remarketingQueue.queueUrl,
+        WAHA_URL: wahaUrl,
+        WAHA_API_KEY: wahaApiKey,
+        STAGE: stage,
+      },
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 256,
+    });
+
+    const remarketingSenderLambda = new lambda.Function(this, 'RemarketingSenderLambda', {
+      functionName: `simple-ai-remarketing-sender-${stage}`,
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'sender-worker.handler',
+      code: remarketingCode,
+      environment: {
+        TABLE_NAME: table.tableName,
+        ANTHROPIC_API_KEY: `{{resolve:secretsmanager:simple-ai/${stage}/anthropic:SecretString:apiKey}}`,
+        WAHA_URL: wahaUrl,
+        WAHA_API_KEY: wahaApiKey,
+        STAGE: stage,
+      },
+      timeout: cdk.Duration.seconds(90),
+      memorySize: 256,
+    });
+
+    const remarketingHealthLambda = new lambda.Function(this, 'RemarketingHealthLambda', {
+      functionName: `simple-ai-remarketing-health-${stage}`,
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'health-monitor.handler',
+      code: remarketingCode,
+      environment: {
+        TABLE_NAME: table.tableName,
+        STAGE: stage,
+      },
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 128,
+    });
+
+    // SQS → Sender worker (batch 1 para throttle correcto)
+    remarketingSenderLambda.addEventSource(
+      new lambdaEventSources.SqsEventSource(remarketingQueue, { batchSize: 1 })
+    );
+
     // ========== Permissions ==========
     table.grantReadWriteData(apiLambda);
     table.grantReadWriteData(messageProcessorLambda);
@@ -217,6 +279,12 @@ COMPOSE`,
     bucket.grantRead(messageProcessorLambda);
     incomingMessagesQueue.grantSendMessages(webhookLambda);
     incomingMessagesQueue.grantSendMessages(apiLambda);
+
+    // Remarketing permissions
+    table.grantReadWriteData(remarketingTriggerLambda);
+    table.grantReadWriteData(remarketingSenderLambda);
+    table.grantReadWriteData(remarketingHealthLambda);
+    remarketingQueue.grantSendMessages(remarketingTriggerLambda);
 
     // EventBridge Scheduler role (allows Scheduler to invoke the API Lambda)
     const schedulerRole = new iam.Role(this, 'ScraperSchedulerRole', {
@@ -249,6 +317,40 @@ COMPOSE`,
     messageProcessorLambda.addEventSource(
       new lambdaEventSources.SqsEventSource(incomingMessagesQueue, { batchSize: 1 })
     );
+
+    // ========== EventBridge Schedules: Remarketing ==========
+    const remarketingSchedulerRole = new iam.Role(this, 'RemarketingSchedulerRole', {
+      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
+    });
+    remarketingSchedulerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-remarketing-trigger-${stage}`,
+        `arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-remarketing-health-${stage}`,
+      ],
+    }));
+
+    new cdk.aws_scheduler.CfnSchedule(this, 'RemarketingTriggerSchedule', {
+      name: `remarketing-trigger-${stage}`,
+      scheduleExpression: 'rate(5 minutes)',
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: {
+        arn: `arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-remarketing-trigger-${stage}`,
+        roleArn: remarketingSchedulerRole.roleArn,
+      },
+      state: 'DISABLED',  // Desactivado hasta que se decida activar manualmente
+    });
+
+    new cdk.aws_scheduler.CfnSchedule(this, 'RemarketingHealthSchedule', {
+      name: `remarketing-health-${stage}`,
+      scheduleExpression: 'rate(15 minutes)',
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: {
+        arn: `arn:aws:lambda:${this.region}:${this.account}:function:simple-ai-remarketing-health-${stage}`,
+        roleArn: remarketingSchedulerRole.roleArn,
+      },
+      state: 'DISABLED',  // Desactivado hasta que se decida activar manualmente
+    });
 
     // ========== API Gateway ==========
     const httpApi = new apigatewayv2.HttpApi(this, 'HttpApi', {

@@ -12,6 +12,7 @@ import { handleChannels } from './routes/channels';
 import { handleOnboarding } from './routes/onboarding';
 import { handleGolden } from './routes/golden';
 import { handleRegression } from './routes/regression';
+import { handleRemarketing } from './routes/remarketing';
 
 export const handler = async (
   event: any
@@ -60,6 +61,7 @@ export const handler = async (
     if (path.startsWith('/onboarding')) return handleOnboarding(httpEvent);
     if (path.startsWith('/golden')) return handleGolden(httpEvent);
     if (path.startsWith('/regression')) return handleRegression(httpEvent);
+    if (path.startsWith('/remarketing')) return handleRemarketing(httpEvent);
     if (path.startsWith('/files')) return handleFiles(httpEvent);
     if (path.startsWith('/test')) return handleTest(httpEvent);
 

@@ -857,6 +857,25 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
   if (!processedText) return;
 
+  // 2b. Remarketing opt-out detection
+  const OPT_OUT_KEYWORDS = ['BAJA', 'STOP', 'NO', 'BASTA', 'CANCELAR', 'DESUSCRIBIR'];
+  const normalizedForOptOut = processedText.toUpperCase().trim();
+  if (OPT_OUT_KEYWORDS.includes(normalizedForOptOut)) {
+    try {
+      await putItem({
+        PK: `TENANT#${tenantId}`, SK: `SUPPRESSION#${externalUserId}`,
+        tenantId, contactPhone: externalUserId,
+        reason: 'opt_out',
+        reasonDetail: processedText.slice(0, 200),
+        suppressedAt: new Date().toISOString(),
+      });
+      console.log(`[REMARKETING] Opt-out detected for ${externalUserId}: "${processedText.slice(0, 50)}"`);
+    } catch (err) {
+      console.error('[REMARKETING] Opt-out save error (non-blocking):', err);
+    }
+    // No retornar: el pipeline normal sigue y el bot responde naturalmente
+  }
+
   // 3. Deduplicación
   const existingMsgs = await queryItems(`WAMSG#${externalMessageId}`);
   if (existingMsgs.length > 0) { console.log(`[${channel}] Dup ${externalMessageId}`); return; }
@@ -894,6 +913,47 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     waMessageId: externalMessageId, channel, timestamp: now,
   });
   await putItem({ PK: `WAMSG#${externalMessageId}`, SK: 'MAP', conversationId, messageId: msgId, timestamp: now });
+
+  // 6b. Remarketing reply attribution
+  try {
+    const recentRemarketingMsgs = await queryItems(
+      `TENANT#${tenantId}#CONTACT#${externalUserId}`,
+      'REMARKETING_MSG#',
+      { limit: 1 },
+    );
+    if (recentRemarketingMsgs.length > 0) {
+      const lastRemarketing = recentRemarketingMsgs[0] as any;
+      const sentAt = new Date(lastRemarketing.sentAt || '').getTime();
+      const SEVENTY_TWO_H = 72 * 60 * 60 * 1000;
+      if (!isNaN(sentAt) && Date.now() - sentAt < SEVENTY_TWO_H && lastRemarketing.campaignId) {
+        const campaignId = lastRemarketing.campaignId as string;
+        const sends = await queryItems(`CAMPAIGN_SEND#${campaignId}`, undefined, { limit: 200 });
+        const sendItem = sends.find(
+          (s: any) => (s.SK as string).endsWith(externalUserId) && s.status === 'sent',
+        );
+        if (sendItem) {
+          await putItem({ ...sendItem, status: 'replied', repliedAt: now });
+          // Actualizar replyCount en la campana
+          const campaign = await getItem({ PK: `TENANT#${tenantId}`, SK: `CAMPAIGN#${campaignId}` });
+          if (campaign) {
+            const variants = (campaign.variants as any[]) || [];
+            const variantId = (sendItem as any).variantId;
+            const updated = variants.map((v: any) =>
+              v.id === variantId ? { ...v, replyCount: (v.replyCount || 0) + 1 } : v,
+            );
+            await putItem({
+              ...campaign,
+              variants: updated,
+              stats: { ...(campaign.stats as any || {}), totalReplied: ((campaign.stats as any)?.totalReplied || 0) + 1 },
+            });
+          }
+          console.log(`[REMARKETING] Reply attributed to campaign ${campaignId} from ${externalUserId}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[REMARKETING] Attribution error (non-blocking):', err);
+  }
 
   // 7. Actualizar conversación
   const unreadCount = (conversation?.unreadCount as number || 0) + 1;
