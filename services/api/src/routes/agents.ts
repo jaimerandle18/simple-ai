@@ -523,22 +523,71 @@ CRÍTICO: incluir ABSOLUTAMENTE TODOS sin excepción.`;
       }
     }
 
+    // PASO: Extraer TODA la info del negocio de la home + businessInfo + productos
     try {
-      const productSample = productList.slice(0, 25).map(p => `${p.name}${p.category ? ` (${p.category})` : ''}`).join(', ');
-      const rubroRes = await anthropic.messages.create({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 300,
-        messages: [{ role: 'user', content: `Productos: ${productSample}\n\nDevolvé JSON: {"rubro": "rubro corto", "calificadores_sugeridos": ["dato1","dato2"], "pregunta_apertura": "pregunta"}` }],
+      const productSample = productList.slice(0, 25).map(p => `${p.name} - ${p.price}${p.category ? ` (${p.category})` : ''}`).join('\n');
+      const homeContent = mainPage?.content?.slice(0, 8000) || '';
+
+      const bizRes = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+        system: `Analizas paginas web de negocios argentinos. Extraé TODA la info del negocio que puedas encontrar. Devolvé JSON con la estructura exacta:
+{
+  "business": {
+    "nombre": "nombre del negocio",
+    "rubro": "rubro corto (ej: ropa streetwear, ferreteria, gastronomia)",
+    "tipo_productos": "que vende",
+    "descripcion_corta": "una linea describiendo el negocio",
+    "ubicacion": "direccion completa si la hay",
+    "sitio_web": "url",
+    "redes": "instagram y otras redes",
+    "publico_objetivo": "a quien le vende"
+  },
+  "horarios": {
+    "lunes_viernes": "horario si lo encontras",
+    "sabado": "",
+    "domingo": ""
+  },
+  "pago": {
+    "metodos": "metodos de pago si aparecen"
+  },
+  "envio": {
+    "zonas": "a donde envian",
+    "costo": "costo de envio si aparece",
+    "gratis_desde": "envio gratis desde X si aparece"
+  },
+  "politicas": {
+    "cambios": "politica de cambios si aparece",
+    "devolucion": "politica si aparece"
+  }
+}
+Solo incluí campos que REALMENTE encontraste. No inventes. Si no hay dato, no incluyas el campo.`,
+        messages: [{ role: 'user', content: `URL: ${url}\n\nContenido de la home:\n${homeContent}\n\nInfo del negocio extraida:\n${businessInfo}\n\nMuestra de productos:\n${productSample}` }],
       });
-      const rubroData = JSON.parse((rubroRes.content[0] as any).text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-      if (rubroData.rubro) {
-        const agentItem = await getItem(keys.agent(tenantId, 'main'));
-        if (agentItem) {
-          const bc = agentItem.businessConfig || {};
-          bc.business = { ...(bc.business || {}), rubro: rubroData.rubro, calificadores_sugeridos: rubroData.calificadores_sugeridos || [], pregunta_apertura_sugerida: rubroData.pregunta_apertura || '' };
-          await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
+
+      const bizText = bizRes.content[0]?.type === 'text' ? bizRes.content[0].text : '{}';
+      const bizData = JSON.parse(bizText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+
+      const agentItem = await getItem(keys.agent(tenantId, 'main'));
+      if (agentItem) {
+        const bc = agentItem.businessConfig || {};
+
+        // Merge cada sección sin pisar datos existentes
+        for (const [section, data] of Object.entries(bizData)) {
+          if (data && typeof data === 'object' && Object.keys(data as any).length > 0) {
+            bc[section] = { ...(bc[section] || {}), ...(data as any) };
+          }
         }
+
+        // Asegurar sitio_web
+        if (!bc.business?.sitio_web && url) {
+          if (!bc.business) bc.business = {};
+          bc.business.sitio_web = url;
+        }
+
+        await putItem({ ...agentItem, businessConfig: bc, updatedAt: now });
+        console.log(`[SCRAPE] Pre-filled businessConfig: ${Object.keys(bizData).join(', ')}`);
       }
-    } catch (err) { console.error('[SCRAPE] rubro error:', err); }
+    } catch (err) { console.error('[SCRAPE] business extract error:', err); }
 
     try {
       const samplePage = pagesToScrape[0];
