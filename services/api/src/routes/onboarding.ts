@@ -277,13 +277,20 @@ ${rubroContext}
 CONFIG: ${JSON.stringify(config, null, 2)}`;
   }
 
+  // Si hay datos pre-llenados del scraper, decirle que confirme
+  const preFilled = config.business && Object.keys(config.business).length > 0;
+  const preFilledHint = preFilled ? `
+DATOS YA DETECTADOS del sitio web (confirmar con el usuario, NO volver a preguntar):
+${JSON.stringify(config.business, null, 2)}
+Si estos datos son correctos, usa save_section para guardarlos y avanza. Solo pregunta lo que FALTA.` : '';
+
   return `\n\n# ESTADO
 Secciones completas: ${completed.map(s => SECTION_LABELS[s]).join(', ') || 'ninguna'}
 SECCION ACTUAL: ${SECTION_LABELS[current]} (${current})
 Pendientes despues: ${pending.map(s => SECTION_LABELS[s]).join(', ') || 'ninguna'}
-${rubroContext}
-Trabaja SOLO en la seccion "${SECTION_LABELS[current]}". Cuando tengas los datos minimos, usa mark_section_complete("${current}") y pasa a la siguiente.
-NO vuelvas a preguntar sobre secciones ya completas.
+${rubroContext}${preFilledHint}
+Trabaja SOLO en la seccion "${SECTION_LABELS[current]}". Cuando tengas los datos minimos, usa save_section para guardar y avanza.
+NO vuelvas a preguntar sobre secciones ya completas. NO repitas datos que ya tenes.
 
 CONFIG ACTUAL:
 ${JSON.stringify(config, null, 2)}`;
@@ -316,6 +323,40 @@ export async function handleOnboarding(event: APIGatewayProxyEventV2) {
 
     let agent = await getItem(keys.agent(tenantId, 'main'));
     let updatedConfig = { ...(agent?.businessConfig || {}) };
+
+    // Pre-fill: si no hay config pero hay productos, inferir datos del negocio
+    if (Object.keys(updatedConfig).length === 0 || !updatedConfig.business?.nombre) {
+      const products = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 20 });
+      if (products.length > 0) {
+        const sourceUrl = (products[0] as any)?.sourceUrl || '';
+        const brands = [...new Set(products.map((p: any) => p.brand).filter(Boolean))];
+        const categories = [...new Set(products.map((p: any) => p.category).filter(Boolean))];
+        const sampleNames = products.slice(0, 10).map((p: any) => p.name).join(', ');
+
+        try {
+          const inferRes = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 500,
+            system: 'Inferí datos del negocio a partir de sus productos. Devolvé JSON: {"nombre":"","rubro":"","tipo_productos":"","sitio_web":"","descripcion_corta":""}. Solo datos que puedas inferir con confianza. No inventes.',
+            messages: [{ role: 'user', content: `URL: ${sourceUrl}\nMarcas: ${brands.join(', ')}\nCategorías: ${categories.join(', ')}\nProductos: ${sampleNames}\nTotal: ${products.length} productos` }],
+          });
+          const inferText = inferRes.content[0]?.type === 'text' ? inferRes.content[0].text : '{}';
+          const inferred = JSON.parse(inferText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+          if (inferred.nombre || inferred.rubro) {
+            updatedConfig.business = { ...(updatedConfig.business || {}), ...inferred };
+            if (sourceUrl) updatedConfig.business.sitio_web = sourceUrl;
+            console.log(`[ONBOARDING] Pre-filled from ${products.length} products: ${JSON.stringify(inferred).slice(0, 200)}`);
+            // Persist
+            if (agent) {
+              agent = { ...agent, businessConfig: updatedConfig, updatedAt: new Date().toISOString() };
+              await putItem(agent);
+            }
+          }
+        } catch (err) {
+          console.error('[ONBOARDING] Pre-fill error:', err);
+        }
+      }
+    }
+
     let updatedSections: string[] = getCompletedSections(updatedConfig);
 
     const historyMsgs = (history || []) as { role: string; content: string }[];
