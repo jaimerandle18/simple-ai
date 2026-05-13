@@ -1380,7 +1380,8 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
     const hasRecent = recentProducts.length > 0;
-    const hasCart = existingCart.length > 0;
+    const existingCartForClassify = (freshConv?.convState?.cart as any[]) || [];
+    const hasCart = existingCartForClassify.length > 0;
     let trivial = isTrivialMessage(combinedMessage);
     const recentNames = recentProducts.map((p: any) => p.name);
     const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentNames);
