@@ -653,6 +653,8 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
             const baseUrl = ((catalog[0] as any)?.sourceUrl || '').replace(/\/$/, '');
             const total = cart.reduce((s: number, i: any) => s + i.price * i.cantidad, 0);
             let checkoutUrl = '';
+            let addedCount = 0;
+            const failedItems: string[] = [];
 
             try {
               // Collect all cookies across requests (manual cookie jar)
@@ -675,8 +677,6 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
               parseCookies(homeRes);
 
               // Add each item via AJAX (X-Requested-With header is key)
-              let addedCount = 0;
-              const failedItems: string[] = [];
               for (const item of cart) {
                 if (!item.variantId) continue;
                 const tnProductId = item.tnProductId || (catalog.find(p => p.name.toLowerCase() === item.productName.toLowerCase()) as any)?.tnProductId;
