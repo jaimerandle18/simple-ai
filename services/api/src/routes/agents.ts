@@ -83,7 +83,7 @@ function buildCaption(p: any, captionCfg?: any): string {
         if (cfg.caption_show_sizes && p.sizes?.length > 0) lines.push(`Talles: ${p.sizes.join(', ')}`);
         break;
       case 'link':
-        if (cfg.caption_show_link && p.pageUrl) lines.push(p.pageUrl);
+        if (cfg.caption_show_link && p.pageUrl) lines.push(`Ver mas → ${p.pageUrl}`);
         break;
     }
   }
