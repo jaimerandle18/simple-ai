@@ -333,10 +333,14 @@ export async function fetchProductDirect(url: string): Promise<DirectProduct | n
           }
         } catch {}
 
+        // Use variant price (actual sale price) over JSON-LD price (may be compare_at/list price)
+        const variantPrice = variants?.find(v => v.available && v.price > 0)?.price;
+        const finalPrice = variantPrice || priceNum;
+
         return {
           name: String(ld.name || '').trim(),
-          price: priceNum > 0 ? String(priceNum) : 'Consultar',
-          priceNum,
+          price: finalPrice > 0 ? String(finalPrice) : 'Consultar',
+          priceNum: finalPrice,
           images,
           description: String(ld.description || '').trim().slice(0, 500),
           brand: brand ? String(brand) : undefined,
