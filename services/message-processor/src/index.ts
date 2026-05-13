@@ -484,11 +484,19 @@ async function generateResponse(
 4. Precio formateado: $XX.XXX (ej: $67.186)
 5. FORMATO DE VENTA — PASO A PASO:
    a) Cuando el cliente pide una CATEGORIA amplia ("busco bermuda", "quiero remera"), NO muestres productos todavia. Primero pregunta 1-2 cosas para filtrar: estilo, color, talle, uso.
-   b) Una vez que tenes al menos 1 filtro, mostra MAXIMO 3 productos. NOMBRA los productos en el texto para que se envien las fotos. NO repitas precio ni descripcion (ya van en el caption de la foto). Maximo 3 lineas: intro + nombres + pregunta.
+   b) Una vez que tenes al menos 1 filtro, mostra MAXIMO 3 productos usando formato INTRO/CIERRE.
    c) Si el cliente quiere ver mas, mostra otros 3 distintos.
-   d) SIEMPRE menciona los nombres de los productos en el texto.
-   e) EJEMPLOS CORRECTOS: "Te paso la Bermuda Cardiff, la Napp y la Pocket. Cual te copa?" o "Mira estas 3. Mas oscuro o mas claro?"
-   f) EJEMPLOS INCORRECTOS: "La Cardiff $55.000 es de gabardina, la Napp $48.000..." (repite info del caption).
+   d) FORMATO INTRO/CIERRE: cuando vas a mostrar productos con foto, estructura tu respuesta asi:
+      INTRO: [texto corto introduciendo los productos, NOMBRANDOLOS. Max 2 lineas. NO precios, NO descripcion]
+      CIERRE: [pregunta corta. Max 1 linea]
+      El sistema manda: tu INTRO → las fotos con caption → tu CIERRE.
+   e) EJEMPLOS:
+      INTRO: Te paso la Bermuda Cardiff, la Napp y la Pocket.
+      CIERRE: Cual te copa?
+      ---
+      INTRO: Tengo estas 3 opciones en negro talle L.
+      CIERRE: Te tira alguna?
+   f) CUANDO NO usar INTRO/CIERRE: si NO vas a mostrar fotos (preguntas sobre horarios, envios, etc), responde normal sin el formato.
 6. USO DE buscar_productos: solo si el cliente pide producto NUEVO. SIEMPRE pasa los filtros que el cliente menciono (color, talle, categoria). Ej: "buzos negros en L" → buscar_productos({ query: "buzo", color: "negro", talle: "L" }). REGLA DE ORO: si el cliente pidio un filtro, NUNCA muestres productos que no lo cumplan.
 7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES. Devolvé un ganador con justificación numérica.
 8. CAMBIO DE CATEGORÍA: si el cliente menciona una categoría distinta, usá buscar_productos.
@@ -1401,16 +1409,20 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     );
     recordSuccess();
 
-    // Formatear respuesta según canal
-    const cleanResponse = formatOutbound(aiResponse, channel);
+    // Parse INTRO/CIERRE structure
+    const introMatch = aiResponse.match(/INTRO:\s*([\s\S]*?)(?=CIERRE:|$)/i);
+    const cierreMatch = aiResponse.match(/CIERRE:\s*([\s\S]*?)$/i);
+    const hasStructure = !!(introMatch && cierreMatch && introMatch[1].trim() && cierreMatch[1].trim());
+    const introText = hasStructure ? formatOutbound(introMatch![1].trim(), channel) : '';
+    const cierreText = hasStructure ? formatOutbound(cierreMatch![1].trim(), channel) : '';
+    const cleanResponse = hasStructure ? `${introText}\n\n${cierreText}` : formatOutbound(aiResponse, channel);
+    // For photo filter, use the full text (intro has the product names)
+    const filterText = hasStructure ? introText : cleanResponse;
 
-    // Enviar respuesta
-    const sendResult = await sendReply(cleanResponse);
-    console.log(`[${channel}] Sent: ${sendResult.externalMessageId}`);
+    console.log(`[FORMAT] hasStructure=${hasStructure}${hasStructure ? ` intro="${introText.slice(0, 80)}" cierre="${cierreText.slice(0, 80)}"` : ''}`);
 
-    // Enviar imágenes de productos mencionados en la respuesta
+    // Determine which photos to send
     const allCandidates = dedupProducts([...freshProducts, ...productsShown]);
-    console.log(`[PHOTOS] cleanResponse for filter: "${cleanResponse.slice(0, 200)}" | candidates: ${allCandidates.length}`);
     const normName = (s: string) => s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
     const sentPhotoNames = new Set<string>();
     const allCandidatePool = [...recentProducts, ...allCandidates];
@@ -1420,7 +1432,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       const nn = normName(p.name);
       if (sentPhotoNames.has(nn)) continue;
       if (!p.imageUrl || !p.imageUrl.startsWith('http') || p.imageUrl.includes('empty-placeholder')) continue;
-      if (!shouldSendPhoto(p, cleanResponse, allCandidatePool)) continue;
+      if (!shouldSendPhoto(p, filterText, allCandidatePool)) continue;
       sentPhotoNames.add(nn);
       imagesToSend.push(p);
       if (imagesToSend.length >= 3) break;
@@ -1475,20 +1487,54 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       return lines.join('\n');
     };
 
-    for (const p of imagesToSend) {
-      const caption = buildProductCaption(p);
-      await sendImage(p.imageUrl, caption);
-      const imgNow = new Date().toISOString();
-      const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await putItem({
-        ...keys.message(conversationId, imgNow, imgId),
-        messageId: imgId, conversationId, tenantId,
-        direction: 'outbound', sender: 'bot', type: 'image',
-        content: caption, imageUrl: p.imageUrl, status: 'sent', timestamp: imgNow,
-      });
+    // Send in correct order: INTRO → fotos → CIERRE (or text + fotos if no structure)
+    let sendResult: any;
+    if (hasStructure && imagesToSend.length > 0) {
+      // 1. Send intro
+      sendResult = await sendReply(introText);
+      console.log(`[${channel}] Sent intro: ${sendResult.externalMessageId}`);
+
+      // 2. Send photos
+      for (const p of imagesToSend) {
+        const caption = buildProductCaption(p);
+        await sendImage(p.imageUrl, caption);
+        await new Promise(r => setTimeout(r, 300)); // small delay for ordering
+        const imgNow = new Date().toISOString();
+        const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        await putItem({
+          ...keys.message(conversationId, imgNow, imgId),
+          messageId: imgId, conversationId, tenantId,
+          direction: 'outbound', sender: 'bot', type: 'image',
+          content: caption, imageUrl: p.imageUrl, status: 'sent', timestamp: imgNow,
+        });
+      }
+
+      // 3. Send cierre
+      await sendReply(cierreText);
+      console.log(`[${channel}] Sent cierre`);
+    } else {
+      // No structure: send text first, then photos
+      sendResult = await sendReply(cleanResponse);
+      console.log(`[${channel}] Sent: ${sendResult.externalMessageId}`);
+
+      for (const p of imagesToSend) {
+        const caption = buildProductCaption(p);
+        await sendImage(p.imageUrl, caption);
+        const imgNow = new Date().toISOString();
+        const imgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        await putItem({
+          ...keys.message(conversationId, imgNow, imgId),
+          messageId: imgId, conversationId, tenantId,
+          direction: 'outbound', sender: 'bot', type: 'image',
+          content: caption, imageUrl: p.imageUrl, status: 'sent', timestamp: imgNow,
+        });
+      }
     }
 
-    // Guardar mensaje y estado
+    // Save bot message to history (clean version without INTRO/CIERRE tags)
+    const historyContent = hasStructure
+      ? `${introText}\n\n[se enviaron ${imagesToSend.length} fotos]\n\n${cierreText}`
+      : cleanResponse;
     const productsToSave = dedupProducts(productsShown).slice(0, 8);
     const replyNow = new Date().toISOString();
     const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1496,7 +1542,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       ...keys.message(conversationId, replyNow, replyId),
       messageId: replyId, conversationId, tenantId,
       direction: 'outbound', sender: 'bot', type: 'text',
-      content: cleanResponse, waMessageId: sendResult.externalMessageId,
+      content: historyContent, waMessageId: sendResult?.externalMessageId,
       status: 'sent', timestamp: replyNow,
     });
     if (sendResult.externalMessageId) {
