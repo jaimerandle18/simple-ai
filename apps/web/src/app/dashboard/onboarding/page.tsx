@@ -741,19 +741,32 @@ function CaptionSection({ config, setValue, applyValue, sampleProducts, availabl
 
   const orderedItems = order.map(k => visibleItems.find(v => v.key === k)!).filter(Boolean);
 
-  // Drag handlers — reorder locally during drag, save on drop (skip confirmation modal)
-  const handleDragStart = (idx: number) => setDragIdx(idx);
+  // Drag handlers — reorder visually during drag, confirm on drop
+  const dragOrderRef = useRef<string[] | null>(null);
+
+  const handleDragStart = (idx: number) => {
+    setDragIdx(idx);
+    dragOrderRef.current = [...order];
+  };
   const handleDragOver = (e: React.DragEvent, idx: number) => {
     e.preventDefault();
-    if (dragIdx === null || dragIdx === idx) return;
-    const newOrder = [...order];
+    if (dragIdx === null || dragIdx === idx || !dragOrderRef.current) return;
+    const newOrder = [...dragOrderRef.current];
     const [moved] = newOrder.splice(dragIdx, 1);
     newOrder.splice(idx, 0, moved);
-    // Use applyValue to skip confirmation modal for drag reorder
+    dragOrderRef.current = newOrder;
+    // Update visually without triggering modal
     applyValue('caption_order', newOrder);
     setDragIdx(idx);
   };
-  const handleDragEnd = () => setDragIdx(null);
+  const handleDragEnd = () => {
+    setDragIdx(null);
+    if (dragOrderRef.current) {
+      // Trigger confirmation modal via setValue on drop
+      setValue('caption_order', dragOrderRef.current);
+      dragOrderRef.current = null;
+    }
+  };
 
   // Truncate description to first sentence (first ".")
   function shortDescription(desc: string): string {
