@@ -609,15 +609,17 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
             }
 
             // Add to cart in convState
+            console.log(`[CART] Product fields: tnProductId=${(product as any).tnProductId}, productId=${(product as any).productId}, variantId=${matchedVariant?.variantId}`);
             const cartItem = {
               productName: product.name,
               productId: (product as any).productId,
+              tnProductId: String((product as any).tnProductId || ''),
               price: product.priceNum || 0,
               talle: input.talle || matchedVariant?.option1 || '',
               color: input.color || matchedVariant?.option0 || '',
               cantidad: input.cantidad || 1,
               sku: matchedVariant?.sku || (product as any).sku || '',
-              variantId: matchedVariant?.variantId || null,
+              variantId: String(matchedVariant?.variantId || ''),
               imageUrl: product.imageUrl || '',
               pageUrl: (product as any).pageUrl || '',
             };
@@ -645,17 +647,87 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
           if (cart.length === 0) {
             toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: 'El carrito está vacío. Primero el cliente tiene que elegir productos.' });
           } else {
-            // Build Tiendanube cart URL: /comprar?sku=X&sku=Y
-            // This adds items to the CLIENT's cart in their browser and shows the cart page
-            const baseUrl = ((catalog[0] as any)?.sourceUrl || (catalog[0] as any)?.pageUrl?.replace(/\/productos\/.*/, '') || '').replace(/\/$/, '');
-            const skus = cart.filter((i: any) => i.sku).map((i: any) => `sku=${encodeURIComponent(i.sku)}`);
-            const checkoutUrl = skus.length > 0
-              ? `${baseUrl}/comprar?${skus.join('&')}`
-              : `${baseUrl}/comprar`;
+            // Build Tiendanube checkout URL server-side:
+            // 1. POST /comprar/ with add_to_cart=productId&variant_id=variantId for each item
+            // 2. POST /comprar/ with go_to_checkout=1 to get checkout redirect
+            const baseUrl = ((catalog[0] as any)?.sourceUrl || '').replace(/\/$/, '');
             const total = cart.reduce((s: number, i: any) => s + i.price * i.cantidad, 0);
+            let checkoutUrl = '';
+
+            try {
+              // Collect all cookies across requests (manual cookie jar)
+              const cookies: Record<string, string> = {};
+              const parseCookies = (res: Response) => {
+                const raw = res.headers.get('set-cookie') || '';
+                // set-cookie can have multiple values joined or separate
+                const all = raw.split(/,(?=[^ ]+=)/).concat(
+                  ...(res.headers.getSetCookie?.() || [])
+                );
+                for (const c of all) {
+                  const match = c.match(/^([^=]+)=([^;]*)/);
+                  if (match) cookies[match[1].trim()] = match[2].trim();
+                }
+              };
+              const cookieStr = () => Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+
+              // Add each item to cart
+              for (const item of cart) {
+                if (!item.variantId) continue;
+                const tnProductId = item.tnProductId || (catalog.find(p => p.name.toLowerCase() === item.productName.toLowerCase()) as any)?.tnProductId;
+                if (!tnProductId) { console.warn(`[CART] No tnProductId for ${item.productName}, skipping`); continue; }
+
+                const addRes = await fetch(`${baseUrl}/comprar/`, {
+                  method: 'POST',
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Origin': baseUrl,
+                    'Referer': `${baseUrl}/productos/`,
+                    ...(cookieStr() ? { 'Cookie': cookieStr() } : {}),
+                  },
+                  body: `add_to_cart=${tnProductId}&variant_id=${item.variantId}&quantity=${item.cantidad}`,
+                  redirect: 'manual',
+                });
+                parseCookies(addRes);
+                console.log(`[CART] Added ${item.productName} (tnProd=${tnProductId}, variant=${item.variantId}) → ${addRes.status}, cookies=${Object.keys(cookies).length}`);
+              }
+
+              // Get checkout URL
+              if (Object.keys(cookies).length > 0) {
+                const checkoutRes = await fetch(`${baseUrl}/comprar/`, {
+                  method: 'POST',
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Origin': baseUrl,
+                    'Referer': `${baseUrl}/comprar/`,
+                    'Cookie': cookieStr(),
+                  },
+                  body: 'go_to_checkout=1',
+                  redirect: 'manual',
+                });
+                const location = checkoutRes.headers.get('location');
+                if (location && location.includes('checkout')) {
+                  checkoutUrl = location;
+                  console.log(`[CART] Checkout URL: ${checkoutUrl}`);
+                } else {
+                  console.warn(`[CART] No checkout redirect, status=${checkoutRes.status}`);
+                }
+              }
+            } catch (err) {
+              console.error('[CART] Checkout generation failed:', err);
+            }
+
+            // Fallback to individual product links
+            if (!checkoutUrl) {
+              const links = cart.map((i: any) => i.pageUrl).filter(Boolean);
+              checkoutUrl = links.length > 0 ? links.join('\n') : baseUrl;
+              console.warn('[CART] Fallback to individual links');
+            }
+
             toolResults.push({
               type: 'tool_result', tool_use_id: toolUse.id,
-              content: `Link de compra generado. Enviaselo al cliente y decile que al abrirlo va a ver el carrito con los productos y solo tiene que clickear "Iniciar Compra":\n${checkoutUrl}\n\nResumen: ${cart.length} productos, total $${total.toLocaleString('es-AR')}`,
+              content: `Link de compra generado con el carrito pre-cargado. Mandalo al cliente:\n${checkoutUrl}\n\nResumen: ${cart.length} productos, total $${total.toLocaleString('es-AR')}\n\nDecile: "Toca aca para pagar, ya esta todo cargado, solo confirma y paga."`,
             });
           }
         }
@@ -1073,7 +1145,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     console.error('[REMARKETING] Attribution error (non-blocking):', err);
   }
 
-  // 7. Actualizar conversación
+  // 7. Actualizar conversación (preservar convState existente)
   const unreadCount = (conversation?.unreadCount as number || 0) + 1;
   await putItem({
     ...keys.conversation(tenantId, conversationId),
@@ -1085,6 +1157,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     unreadCount, lastMessageAt: now,
     lastMessagePreview: processedText.slice(0, 100),
     createdAt: conversation?.createdAt || now,
+    convState: conversation?.convState || {},
     channel,
   });
 
@@ -1190,6 +1263,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
     // Load existing cart from convState
     const existingCart = (freshConv?.convState?.cart as any[]) || [];
+    console.log(`[CART] Loaded existing cart: ${existingCart.length} items`, existingCart.map((i: any) => i.productName));
 
     const { text: aiResponse, productsShown, freshProducts, cart: updatedCart } = await generateResponse(
       combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
