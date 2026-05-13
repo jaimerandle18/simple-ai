@@ -83,11 +83,14 @@ const TOOLS: Anthropic.Tool[] = [
 // ============================================================
 const COLOR_MAP: Record<string, string[]> = {
   negro: ['negro', 'black'], blanco: ['blanco', 'white', 'bone', 'crudo', 'ecru'],
-  marron: ['marron', 'brown', 'camel', 'chocolate', 'tabaco'], azul: ['azul', 'blue', 'sky', 'celeste', 'navy'],
+  marron: ['marron', 'brown', 'camel', 'chocolate', 'tabaco', 'coffee'], azul: ['azul', 'blue', 'sky', 'celeste', 'navy'],
   gris: ['gris', 'grey', 'gray'], verde: ['verde', 'green', 'militar', 'oliva'],
   rojo: ['rojo', 'red', 'bordo', 'burgundy', 'merlot'], rosa: ['rosa', 'pink'],
   beige: ['beige', 'arena', 'nude', 'natural'], amarillo: ['amarillo', 'yellow', 'mustard'],
   naranja: ['naranja', 'orange', 'oxide', 'oxido'],
+  // Aliases compuestos
+  oscuro: ['negro', 'black', 'marron', 'brown', 'gris', 'grey', 'gray', 'navy', 'dark', 'coffee', 'oxide'],
+  claro: ['blanco', 'white', 'bone', 'crudo', 'ecru', 'beige', 'arena', 'nude', 'sky', 'celeste', 'natural', 'mustard'],
 };
 
 function normalizeColor(color: string): string[] {
@@ -478,7 +481,7 @@ async function generateResponse(
     ? `\n# CARRITO ACTUAL DEL CLIENTE\n${_cart.map((i, idx) => `${idx + 1}. ${i.productName}${i.talle ? ` (${i.talle})` : ''}${i.color ? ` - ${i.color}` : ''} x${i.cantidad} — $${(i.price * i.cantidad).toLocaleString('es-AR')}`).join('\n')}\nTotal: $${_cart.reduce((s, i) => s + i.price * i.cantidad, 0).toLocaleString('es-AR')}`
     : '';
 
-  const HARDCODED_RULES = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes productos ni precios.
+  const HARDCODED_RULES = `1. REGLA INVIOLABLE: SOLO mencionas productos cuyo nombre EXACTO aparece en PRODUCTOS_DISPONIBLES o en el resultado de buscar_productos. NUNCA inventes nombres, NUNCA simplifiques nombres, NUNCA cambies idioma de colores. Si buscar_productos devuelve 0 resultados, deci "no tengo eso" y ofrece alternativas. NUNCA menciones un producto que no haya salido en el resultado de una tool.
 2. NUNCA digas "no tengo eso cargado" si PRODUCTOS_DISPONIBLES tiene productos. Solo mandá links de compra usando generar_link_compra, nunca inventes URLs.
 3. NUNCA cierres con "¿algo más?". Hacé una pregunta específica o confirmación.
 4. Precio formateado: $XX.XXX (ej: $67.186)
