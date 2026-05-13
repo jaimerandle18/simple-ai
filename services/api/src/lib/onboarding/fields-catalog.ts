@@ -660,7 +660,6 @@ const CAPTION_FIELDS: FieldDefinition[] = [
       maxLength: 150,
     },
   },
-  { id: 'caption_order', section: 'caption', label: 'Orden de campos', type: 'simple_text', required: false },
 ];
 
 // ============================================================
