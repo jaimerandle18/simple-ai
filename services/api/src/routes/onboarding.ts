@@ -277,12 +277,30 @@ ${rubroContext}
 CONFIG: ${JSON.stringify(config, null, 2)}`;
   }
 
-  // Si hay datos pre-llenados del scraper, decirle que confirme
-  const preFilled = config.business && Object.keys(config.business).length > 0;
-  const preFilledHint = preFilled ? `
-DATOS YA DETECTADOS del sitio web (confirmar con el usuario, NO volver a preguntar):
-${JSON.stringify(config.business, null, 2)}
-Si estos datos son correctos, usa save_section para guardarlos y avanza. Solo pregunta lo que FALTA.` : '';
+  // Si hay datos pre-llenados del scraper, decirle que arranque con resumen
+  const filledSections: string[] = [];
+  for (const s of SECTION_ORDER) {
+    const data = config[s];
+    if (data && typeof data === 'object' && Object.keys(data).some(k => data[k])) {
+      filledSections.push(s);
+    }
+  }
+  const hasPreFill = filledSections.length > 0;
+
+  const preFilledHint = hasPreFill ? `
+# DATOS YA DETECTADOS DEL SITIO WEB
+${filledSections.map(s => `## ${SECTION_LABELS[s] || s}\n${JSON.stringify(config[s], null, 2)}`).join('\n\n')}
+
+INSTRUCCIONES CRITICAS:
+1. Si es el PRIMER mensaje del usuario, empeza con un resumen tipo:
+   "Ya scrapeé tu sitio y encontré esto:
+   [resumen de lo encontrado en formato legible, NO JSON]
+   Esta todo bien o queres ajustar algo?
+   Lo que NO encontré: [listar secciones faltantes]"
+2. Para secciones con datos: mostralos y pedi confirmacion. Si confirma, usa save_section y avanza.
+3. Para secciones SIN datos: pregunta normalmente.
+4. NUNCA preguntes algo que YA esta pre-cargado a menos que el cliente quiera cambiarlo.
+5. Cuando el cliente confirma datos pre-cargados, usa save_section con TODOS los datos de esa seccion.` : '';
 
   return `\n\n# ESTADO
 Secciones completas: ${completed.map(s => SECTION_LABELS[s]).join(', ') || 'ninguna'}
@@ -324,36 +342,59 @@ export async function handleOnboarding(event: APIGatewayProxyEventV2) {
     let agent = await getItem(keys.agent(tenantId, 'main'));
     let updatedConfig = { ...(agent?.businessConfig || {}) };
 
-    // Pre-fill: si no hay config pero hay productos, inferir datos del negocio
+    // Pre-fill: cargar todo lo que el scraper haya encontrado
     if (Object.keys(updatedConfig).length === 0 || !updatedConfig.business?.nombre) {
-      const products = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 20 });
-      if (products.length > 0) {
-        const sourceUrl = (products[0] as any)?.sourceUrl || '';
-        const brands = [...new Set(products.map((p: any) => p.brand).filter(Boolean))];
-        const categories = [...new Set(products.map((p: any) => p.category).filter(Boolean))];
-        const sampleNames = products.slice(0, 10).map((p: any) => p.name).join(', ');
+      try {
+        // 1. Páginas institucionales del sitio
+        const sitePages: any[] = await queryItems(`TENANT#${tenantId}`, 'SITEPAGE#', { limit: 20 });
 
-        try {
+        // 2. Productos para inferir rubro
+        const products = await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 20 });
+        const sourceUrl = (products[0] as any)?.sourceUrl || '';
+        const productCount = products.length;
+
+        // 3. Armar contexto para que Haiku extraiga TODO de una
+        const sitePagesText = sitePages.map((p: any) =>
+          `[${(p.type || '').toUpperCase()}] ${(p.content || '').slice(0, 2000)}`
+        ).join('\n\n');
+        const productSample = products.slice(0, 15).map((p: any) => `${p.name} - ${p.price}`).join(', ');
+
+        if (sitePagesText.length > 50 || productCount > 0) {
           const inferRes = await anthropic.messages.create({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 500,
-            system: 'Inferí datos del negocio a partir de sus productos. Devolvé JSON: {"nombre":"","rubro":"","tipo_productos":"","sitio_web":"","descripcion_corta":""}. Solo datos que puedas inferir con confianza. No inventes.',
-            messages: [{ role: 'user', content: `URL: ${sourceUrl}\nMarcas: ${brands.join(', ')}\nCategorías: ${categories.join(', ')}\nProductos: ${sampleNames}\nTotal: ${products.length} productos` }],
+            model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+            system: `Extraé TODA la info del negocio de estas fuentes. Devolvé JSON con EXACTAMENTE esta estructura (solo campos que encuentres, no inventar):
+{
+  "business": { "nombre":"", "rubro":"", "tipo_productos":"", "ubicacion":"", "sitio_web":"", "redes":"", "telefono":"", "email":"", "publico_objetivo":"", "descripcion_corta":"" },
+  "horarios": { "lunes_viernes":"", "sabado":"", "domingo":"", "mensaje_fuera_horario":"" },
+  "pago": { "metodos":"", "descuentos":"", "cuotas":"" },
+  "envio": { "zonas":"", "servicio":"", "tiempo":"", "costo":"", "gratis_desde":"", "retiro_local":"" },
+  "politicas": { "cambios":"", "devolucion":"", "garantia":"" }
+}`,
+            messages: [{ role: 'user', content: `URL: ${sourceUrl}\nProductos (${productCount}): ${productSample}\n\nPaginas del sitio:\n${sitePagesText}` }],
           });
           const inferText = inferRes.content[0]?.type === 'text' ? inferRes.content[0].text : '{}';
           const inferred = JSON.parse(inferText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-          if (inferred.nombre || inferred.rubro) {
-            updatedConfig.business = { ...(updatedConfig.business || {}), ...inferred };
-            if (sourceUrl) updatedConfig.business.sitio_web = sourceUrl;
-            console.log(`[ONBOARDING] Pre-filled from ${products.length} products: ${JSON.stringify(inferred).slice(0, 200)}`);
-            // Persist
-            if (agent) {
-              agent = { ...agent, businessConfig: updatedConfig, updatedAt: new Date().toISOString() };
-              await putItem(agent);
+
+          // Merge cada sección
+          for (const [section, data] of Object.entries(inferred)) {
+            if (data && typeof data === 'object' && Object.keys(data as any).some(k => (data as any)[k])) {
+              updatedConfig[section] = { ...(updatedConfig[section] || {}), ...(data as any) };
             }
           }
-        } catch (err) {
-          console.error('[ONBOARDING] Pre-fill error:', err);
+          if (sourceUrl && !updatedConfig.business?.sitio_web) {
+            if (!updatedConfig.business) updatedConfig.business = {};
+            updatedConfig.business.sitio_web = sourceUrl;
+          }
+
+          console.log(`[ONBOARDING] Pre-filled from scrape: ${Object.keys(inferred).join(', ')}`);
+
+          if (agent) {
+            agent = { ...agent, businessConfig: updatedConfig, updatedAt: new Date().toISOString() };
+            await putItem(agent);
+          }
         }
+      } catch (err) {
+        console.error('[ONBOARDING] Pre-fill error:', err);
       }
     }
 
