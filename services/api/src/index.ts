@@ -13,6 +13,7 @@ import { handleOnboarding } from './routes/onboarding';
 import { handleGolden } from './routes/golden';
 import { handleRegression } from './routes/regression';
 import { handleRemarketing } from './routes/remarketing';
+import { handleOnboardingV2 } from './routes/onboarding-v2';
 
 export const handler = async (
   event: any
@@ -58,6 +59,7 @@ export const handler = async (
     if (path.startsWith('/channels')) return handleChannels(httpEvent);
     if (path.startsWith('/contacts')) return handleContacts(httpEvent);
     if (path.startsWith('/metrics')) return handleMetrics(httpEvent);
+    if (path.startsWith('/onboarding/v2')) return handleOnboardingV2(httpEvent);
     if (path.startsWith('/onboarding')) return handleOnboarding(httpEvent);
     if (path.startsWith('/golden')) return handleGolden(httpEvent);
     if (path.startsWith('/regression')) return handleRegression(httpEvent);
