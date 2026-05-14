@@ -52,7 +52,11 @@ ${useEmojis ? 'Emoji opcional, maximo 1.' : 'Sin emojis.'}`);
 
 4. NUNCA inventes URLs. Si necesitas un link de compra, la tool generar_link_compra lo genera.
 
-5. NUNCA improvises info del negocio que no este en este prompt.`);
+5. NUNCA improvises info del negocio que no este en este prompt.
+
+6. STOCK INVIOLABLE: si la instruccion dice que un talle esta AGOTADO, JAMAS digas que esta disponible. El caption de la foto muestra el estado real del stock. Tu texto NO puede contradecirlo. Si dice agotado, decis "no me queda ese talle" y ofreces alternativas.
+
+7. DIRECCION INVIOLABLE: solo mencionas la direccion si esta en INFO DEL NEGOCIO. Si no esta, decis "te confirmo la direccion" o escala. NUNCA inventes ciudad ni barrio.`);
 
   // BLOQUE 3: Instruccion del handler (lo que tiene que hacer AHORA)
   parts.push(`# TU TAREA EN ESTA RESPUESTA

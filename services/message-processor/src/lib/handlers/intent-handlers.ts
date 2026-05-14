@@ -123,35 +123,133 @@ export function handleIntent(args: {
       const specificResults = searchCatalogFn(specificQuery, catalog, {
         categoria: filters.category || undefined,
       });
-      const match = specificResults[0];
+      const match = specificResults[0] || recentProducts.find((p: any) =>
+        hints.some(h => p.name.toLowerCase().includes(h.toLowerCase()))
+      );
+
+      if (!match) {
+        return {
+          productsToShow: [],
+          maxPhotos: 0,
+          redactorInstruction: 'No encontre el producto que pidio. Deci honestamente y ofrece buscar otra cosa.',
+          complexity: 'followup',
+          needsToolSearch: false,
+        };
+      }
+
+      // Stock check if client mentioned a size
+      const specSize = (filters.size || '').toUpperCase();
+      let stockNote = '';
+      if (specSize) {
+        const pSizes: string[] = (match.sizes || []).map((s: string) => s.toUpperCase());
+        const pOos: string[] = (match.outOfStockSizes || []).map((s: string) => s.toUpperCase());
+        const availSizes = pSizes.filter((s: string) => !pOos.includes(s));
+        const isOos = pOos.includes(specSize);
+
+        console.log(`[STOCK_CHECK] product="${match.name}" size=${specSize} outOfStock=${isOos} available=[${availSizes.join(',')}]`);
+
+        if (isOos) {
+          stockNote = `\n\nIMPORTANTE: El talle ${specSize} esta AGOTADO en "${match.name}". NO digas que esta disponible. Talles con stock: ${availSizes.join(', ') || 'ninguno'}. Ofrece alternativas.`;
+        } else if (pSizes.includes(specSize)) {
+          stockNote = `\n\nTalle ${specSize} DISPONIBLE en "${match.name}".`;
+        }
+      }
+
       return {
-        productsToShow: match ? [match] : [],
+        productsToShow: [match],
         maxPhotos: 1,
-        redactorInstruction: match
-          ? `Da detalles de "${match.name}" (material, talles disponibles, por que lo recomendas). El caption ya tiene nombre+precio, complementa con info nueva.`
-          : `No encontre el producto que pidio. Deci honestamente y ofrece buscar otra cosa.`,
+        redactorInstruction: `Da detalles de "${match.name}" (material, talles disponibles, por que lo recomendas). El caption ya tiene nombre+precio, complementa con info nueva.${stockNote}`,
         complexity: 'followup',
         needsToolSearch: false,
       };
     }
 
-    case 'product_followup':
-      return {
-        productsToShow: recentProducts,
-        maxPhotos: 3,
-        redactorInstruction: 'Responde sobre los productos que ya se mostraron. Si pide otro color/talle, busca con la tool.',
-        complexity: 'followup',
-        needsToolSearch: false,
-      };
+    case 'product_followup': {
+      // If client mentions a size, check stock for the most likely product
+      const followupSize = (filters.size || '').toUpperCase();
+      let followupInstruction = 'Responde sobre los productos que ya se mostraron.';
 
-    case 'size_check':
+      if (followupSize && recentProducts.length > 0) {
+        // Check stock for each recent product
+        const stockInfo = recentProducts.map((p: any) => {
+          const pSizes: string[] = (p.sizes || []).map((s: string) => s.toUpperCase());
+          const pOos: string[] = (p.outOfStockSizes || []).map((s: string) => s.toUpperCase());
+          const isOos = pOos.includes(followupSize);
+          const exists = pSizes.includes(followupSize);
+          const available = pSizes.filter((s: string) => !pOos.includes(s));
+          return { name: p.name, isOos, exists, available };
+        });
+
+        const stockSummary = stockInfo.map(s => {
+          if (s.isOos) return `"${s.name}": talle ${followupSize} AGOTADO. Disponibles: ${s.available.join(', ') || 'ninguno'}`;
+          if (s.exists) return `"${s.name}": talle ${followupSize} DISPONIBLE`;
+          return `"${s.name}": talle ${followupSize} no existe. Talles: ${s.available.join(', ')}`;
+        }).join('\n');
+
+        console.log(`[STOCK_CHECK] followup size=${followupSize} products=${stockInfo.map(s => `${s.name}:${s.isOos ? 'OOS' : 'OK'}`).join(', ')}`);
+        followupInstruction = `STOCK del talle ${followupSize} en productos recientes:\n${stockSummary}\n\nSI esta agotado, NO digas que esta disponible. Ofrece alternativas.`;
+      }
+
       return {
         productsToShow: recentProducts,
         maxPhotos: 0,
-        redactorInstruction: `El cliente pregunta por talle ${filters.size || ''}. Verifica disponibilidad en PRODUCTOS_DISPONIBLES y responde con los que tienen ese talle.`,
+        redactorInstruction: followupInstruction,
         complexity: 'followup',
         needsToolSearch: false,
       };
+    }
+
+    case 'size_check': {
+      const askedSize = (filters.size || '').toUpperCase();
+      const product = recentProducts[0]; // last shown product
+
+      if (!product || !askedSize) {
+        return {
+          productsToShow: recentProducts,
+          maxPhotos: 0,
+          redactorInstruction: `El cliente pregunta por talle ${askedSize || '?'}. No hay producto reciente en contexto. Pregunta que producto le interesa.`,
+          complexity: 'followup',
+          needsToolSearch: false,
+        };
+      }
+
+      const sizes: string[] = (product.sizes || []).map((s: string) => s.toUpperCase());
+      const outOfStock: string[] = (product.outOfStockSizes || []).map((s: string) => s.toUpperCase());
+      const availableSizes = sizes.filter((s: string) => !outOfStock.includes(s));
+      const isOutOfStock = outOfStock.includes(askedSize);
+      const existsInLine = sizes.includes(askedSize);
+
+      console.log(`[STOCK_CHECK] product="${product.name}" size=${askedSize} exists=${existsInLine} outOfStock=${isOutOfStock} available=[${availableSizes.join(',')}]`);
+
+      if (isOutOfStock) {
+        return {
+          productsToShow: [product],
+          maxPhotos: 0,
+          redactorInstruction: `IMPORTANTE: El talle ${askedSize} esta AGOTADO en "${product.name}". NO digas que esta disponible. Talles disponibles: ${availableSizes.join(', ') || 'ninguno'}. Ofrece alternativas amablemente.`,
+          complexity: 'followup',
+          needsToolSearch: false,
+        };
+      }
+
+      if (!existsInLine) {
+        return {
+          productsToShow: [product],
+          maxPhotos: 0,
+          redactorInstruction: `El talle ${askedSize} NO existe en "${product.name}". Talles de este producto: ${sizes.join(', ')}. Informa y ofrece los disponibles.`,
+          complexity: 'followup',
+          needsToolSearch: false,
+        };
+      }
+
+      // Size available
+      return {
+        productsToShow: [product],
+        maxPhotos: 0,
+        redactorInstruction: `Talle ${askedSize} DISPONIBLE en "${product.name}". Confirma y pregunta si quiere proceder con la compra.`,
+        complexity: 'followup',
+        needsToolSearch: false,
+      };
+    }
 
     case 'purchase_intent':
       return {
