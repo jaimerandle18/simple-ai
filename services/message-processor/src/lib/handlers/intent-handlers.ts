@@ -5,6 +5,25 @@
  */
 import type { ClassifierResult, Intent } from '../classifier/intent-classifier';
 
+const COLOR_ALIASES: Record<string, string[]> = {
+  negro: ['negro', 'black'], blanco: ['blanco', 'white', 'bone', 'crudo', 'ecru'],
+  marron: ['marron', 'brown', 'camel', 'coffee'], azul: ['azul', 'blue', 'sky', 'celeste', 'navy'],
+  gris: ['gris', 'grey', 'gray'], verde: ['verde', 'green'],
+  rojo: ['rojo', 'red', 'bordo', 'merlot'], rosa: ['rosa', 'pink'],
+  beige: ['beige', 'arena', 'nude'], amarillo: ['amarillo', 'yellow', 'mustard'],
+  naranja: ['naranja', 'orange', 'oxide'],
+  oscuro: ['negro', 'black', 'marron', 'brown', 'gris', 'grey', 'navy', 'dark', 'coffee', 'oxide'],
+  claro: ['blanco', 'white', 'bone', 'crudo', 'ecru', 'beige', 'sky', 'celeste', 'mustard'],
+};
+
+function normalizeColorAliases(color: string): string[] {
+  const c = color.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [key, aliases] of Object.entries(COLOR_ALIASES)) {
+    if (aliases.includes(c) || key === c) return aliases;
+  }
+  return [c];
+}
+
 export interface HandlerContext {
   // Productos que el redactor debe mencionar (ya filtrados y ordenados por código)
   productsToShow: any[];
@@ -55,20 +74,43 @@ export function handleIntent(args: {
       const range = filters.priceRange;
       let sorted = catalog.filter((p: any) => p.priceNum > 0);
 
-      // Apply category filter if extracted — match with fuzzy plural/singular
+      // Apply category filter — fuzzy plural/singular
       if (filters.category) {
         const catLower = filters.category.toLowerCase();
-        // Generate variants: buzos→buzo, remeras→remera, pantalones→pantalon
         const catVariants = [catLower];
         if (catLower.endsWith('s')) catVariants.push(catLower.slice(0, -1));
         if (catLower.endsWith('es')) catVariants.push(catLower.slice(0, -2));
-
         const filtered = sorted.filter((p: any) => {
           const name = (p.name || '').toLowerCase();
           const cat = (p.category || '').toLowerCase();
           return catVariants.some(v => name.includes(v) || cat.includes(v));
         });
-        console.log(`[HANDLER price_check] category="${catLower}" variants=[${catVariants}] pool: ${sorted.length} → ${filtered.length}`);
+        console.log(`[HANDLER price_check] category="${catLower}" pool: ${sorted.length} → ${filtered.length}`);
+        if (filtered.length > 0) sorted = filtered;
+      }
+
+      // Apply color filter (from merged conversation filters)
+      if (filters.color) {
+        const colorAliases = normalizeColorAliases(filters.color);
+        const filtered = sorted.filter((p: any) => {
+          const name = (p.name || '').toLowerCase();
+          const variants = (p.variants || []) as any[];
+          if (colorAliases.some(c => name.includes(c))) return true;
+          return variants.some((v: any) => colorAliases.some(c => (v.option0 || '').toLowerCase().includes(c)));
+        });
+        console.log(`[HANDLER price_check] color="${filters.color}" pool: ${sorted.length} → ${filtered.length}`);
+        if (filtered.length > 0) sorted = filtered;
+      }
+
+      // Apply size filter — only products with this size in stock
+      if (filters.size) {
+        const sizeUpper = filters.size.toUpperCase();
+        const filtered = sorted.filter((p: any) => {
+          const sizes: string[] = (p.sizes || []).map((s: string) => s.toUpperCase());
+          const oos: string[] = (p.outOfStockSizes || []).map((s: string) => s.toUpperCase());
+          return sizes.includes(sizeUpper) && !oos.includes(sizeUpper);
+        });
+        console.log(`[HANDLER price_check] size="${filters.size}" pool: ${sorted.length} → ${filtered.length}`);
         if (filtered.length > 0) sorted = filtered;
       }
 
@@ -79,7 +121,8 @@ export function handleIntent(args: {
       }
 
       const winner = sorted[0];
-      if (winner) console.log(`[HANDLER price_check] winner="${winner.name}" price=$${winner.priceNum}`);
+      const activeFilterDesc = [filters.color, filters.size, filters.category].filter(Boolean).join(', ');
+      if (winner) console.log(`[HANDLER price_check] filters=[${activeFilterDesc}] winner="${winner.name}" price=$${winner.priceNum}`);
       return {
         productsToShow: winner ? [winner] : [],
         maxPhotos: 1,

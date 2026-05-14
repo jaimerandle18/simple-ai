@@ -1160,6 +1160,47 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 // ============================================================
 // PIPELINE UNIFICADO: procesa NormalizedMessage con cualquier adapter
 // ============================================================
+/**
+ * Merge conversation filters: accumulates across turns.
+ * Reset if category changes. Expire after 30 min (handled by caller checking lastFilterUpdate).
+ */
+function mergeConversationFilters(
+  previous: Record<string, any>,
+  current: Record<string, any>,
+  userMessage: string,
+  intent: string,
+): Record<string, any> {
+  // Greeting/small_talk reset filters
+  if (intent === 'greeting' || intent === 'small_talk') return {};
+
+  // If no previous filters, just use current
+  if (!previous || Object.keys(previous).length === 0) return { ...current };
+
+  // If client explicitly changes category, reset
+  if (current.category && previous.category &&
+      current.category.toLowerCase() !== previous.category.toLowerCase()) {
+    return { ...current };
+  }
+
+  // If client says "otro color", "ahora en X", "cambio" — replace mentioned, keep rest
+  const msgLower = userMessage.toLowerCase();
+  const isExplicitChange = /ahora en|otro color|cambi[ao]|mejor en|prefiero/i.test(msgLower);
+
+  const merged: Record<string, any> = { ...previous };
+  for (const [key, value] of Object.entries(current)) {
+    if (value !== null && value !== undefined) {
+      merged[key] = value;
+    }
+  }
+
+  // Remove null entries from merged
+  for (const key of Object.keys(merged)) {
+    if (merged[key] === null || merged[key] === undefined) delete merged[key];
+  }
+
+  return merged;
+}
+
 async function processNormalizedMessage(msg: NormalizedMessage, adapter: ChannelAdapter) {
   const { tenantId, channel, externalUserId, externalMessageId, senderName } = msg;
   const textBody = msg.content.text || '';
@@ -1448,7 +1489,16 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
     const contextOnly = dedupProducts(recentProducts).slice(0, 6);
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
-    // Use classifier-based complexity, fallback to old logic
+    // Merge filters with previous conversation filters (persisted in convState)
+    // Load previous filters (expire after 30 min)
+    const lastFilterUpdate = freshConv?.convState?.lastFilterUpdate as string;
+    const filtersExpired = lastFilterUpdate && (Date.now() - new Date(lastFilterUpdate).getTime() > 30 * 60 * 1000);
+    const previousFilters = filtersExpired ? {} : ((freshConv?.convState?.activeFilters as any) || {});
+    const currentFilters = classification.extracted_filters || {};
+    const mergedFilters = mergeConversationFilters(previousFilters, currentFilters, combinedMessage, classification.primary_intent);
+    classification.extracted_filters = mergedFilters;
+    console.log(`[FILTERS] previous=${JSON.stringify(previousFilters)} current=${JSON.stringify(currentFilters)} merged=${JSON.stringify(mergedFilters)}`);
+
     // Handler: determines what to show, how many, and instructions for the redactor
     const handlerCtx = handleIntent({
       classification,
@@ -1691,7 +1741,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       assignedTo: 'bot', unreadCount: 0,
       lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100),
       createdAt: conversation?.createdAt || now,
-      convState: { recentProducts: productsToSave, cart: updatedCart || [] },
+      convState: { recentProducts: productsToSave, cart: updatedCart || [], activeFilters: mergedFilters, lastFilterUpdate: new Date().toISOString() },
       channel,
     });
 
