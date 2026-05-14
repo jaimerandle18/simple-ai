@@ -52,12 +52,12 @@ export async function classifyIntent(args: {
 Analiza el mensaje del cliente y devolve SOLO un JSON.
 
 Intents posibles:
-- greeting: solo saluda sin pedir nada
-- product_search: pide categoria amplia ("remeras", "buzos", "algo en negro")
-- product_specific: pide un producto especifico por nombre ("el Hoodie Equal")
-- product_followup: pregunta sobre productos ya mostrados ("y en otro color?", "el mas barato de esos")
+- greeting: PRIMER contacto, el cliente saluda. Requiere presentacion del bot.
+- product_search: pide VER OPCIONES de una categoria ("remeras", "buzos", "algo en negro"). Mostrar 3-4 productos.
+- product_specific: pide un producto especifico por nombre ("el Hoodie Equal", "la Remera Tokyo")
+- product_followup: pregunta sobre productos ya mostrados ("y en otro color?", "cual es mas liviano?")
 - size_check: pregunta por disponibilidad de talle ("tenes talle L?", "viene en 36?")
-- price_check: pregunta sobre precios ("cuanto sale?", "el mas barato?")
+- price_check: quiere UN producto seleccionado por criterio de precio ("el mas barato", "el mas caro", "cuanto sale?"). Mostrar SOLO 1 producto.
 - business_info: horarios, direccion, contacto
 - shipping_info: envios, costo, tiempo de entrega
 - payment_info: metodos de pago, cuotas
@@ -65,13 +65,31 @@ Intents posibles:
 - purchase_intent: quiere comprar ("lo quiero", "me lo llevo", "agregame al carrito")
 - purchase_confirm: confirma una compra ya iniciada ("dale", "si", "listo", "cerramos", "pasame el link")
 - human_escalation: insulto, queja grave, pide hablar con humano
-- small_talk: gracias, ok, joya (sin info nueva, sin contexto de compra)
+- small_talk: MID-CONVERSATION, respuesta breve sin re-presentacion ("gracias", "ok", "joya", "dale gracias", "de una")
 - off_topic: pregunta no relacionada al negocio
 - unclear: no se puede clasificar
 
-IMPORTANTE sobre purchase_confirm vs small_talk:
-- Si el bot acaba de preguntar "te lo agrego?" o "cerramos la compra?" y el cliente dice "dale/si/listo" → purchase_confirm
-- Si el bot acaba de decir "hola que buscas?" y el cliente dice "ok" → small_talk
+DIFERENCIAS CLAVE — lee con atencion:
+
+product_search vs price_check:
+- "busco una remera" → product_search (quiere VER opciones)
+- "el mas barato" → price_check (quiere UN producto, el de menor precio)
+- "el mas caro" → price_check (quiere UN producto, el de mayor precio)
+- "que tenes mas barato?" → price_check
+- "cuanto sale la Remera Tokyo?" → price_check
+
+greeting vs small_talk:
+- "hola" → greeting (primer contacto, presentarse)
+- "buenas" → greeting
+- "que tal" → greeting
+- "gracias" → small_talk (mid-conversation, NO re-presentarse)
+- "joya" → small_talk
+- "ok dale" → small_talk
+- "genial" → small_talk
+
+purchase_confirm vs small_talk:
+- Bot dijo "te lo agrego?" + cliente dice "dale" → purchase_confirm
+- Bot dijo "hola que buscas?" + cliente dice "ok" → small_talk
 - El CONTEXTO determina la diferencia.
 
 Vertical del negocio: ${args.vertical}
