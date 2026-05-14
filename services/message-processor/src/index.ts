@@ -15,6 +15,7 @@ import { transcribeWhatsAppAudio, downloadWhatsAppMedia } from './lib/audio-tran
 import { loadContactMemory, updateContactMemory } from './lib/contact-memory';
 import { logTurnMetrics } from './lib/ab-testing';
 import { CALCULADORA_TOOL, calcularMateriales } from './lib/calculadora-blockplas';
+import { classifyIntent, type ClassifierResult } from './lib/classifier/intent-classifier';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -1378,22 +1379,59 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const contactMemory = await loadContactMemory(tenantId, externalUserId);
     if (contactMemory) agentCfg._contactMemory = contactMemory;
 
+    // 16b. Intent classification (Haiku — fast, cheap)
+    const recentForClassifier = historyItems.slice(-4).map((m: any) => ({
+      role: m.direction === 'inbound' ? 'user' : 'assistant',
+      content: (m.content as string || '').slice(0, 200),
+    }));
+    const classification = await classifyIntent({
+      userMessage: combinedMessage,
+      recentMessages: recentForClassifier,
+      vertical: agentCfg.business?.vertical || agentCfg.business?.rubro || 'other',
+    });
+    console.log(`[CLASSIFIER] intent=${classification.primary_intent} filters=${JSON.stringify(classification.extracted_filters)} confidence=${classification.confidence} reasoning="${classification.reasoning}"`);
+
     let recentProducts: EnrichedProduct[] = (freshConv?.convState?.recentProducts || []) as EnrichedProduct[];
     const hasRecent = recentProducts.length > 0;
     const existingCartForClassify = (freshConv?.convState?.cart as any[]) || [];
     const hasCart = existingCartForClassify.length > 0;
+
+    // Use classifier to determine complexity (replaces old regex-based isTrivialMessage)
+    const intentToComplexity: Record<string, MessageComplexity> = {
+      greeting: 'trivial',
+      small_talk: 'trivial',
+      off_topic: 'trivial',
+      product_search: 'new_query',
+      product_specific: 'new_query',
+      product_followup: 'followup',
+      size_check: 'followup',
+      price_check: 'followup',
+      business_info: 'followup',
+      shipping_info: 'followup',
+      payment_info: 'followup',
+      returns_info: 'followup',
+      purchase_intent: 'new_query',
+      purchase_confirm: 'followup',
+      human_escalation: 'followup',
+      unclear: 'new_query',
+    };
+
+    // Fallback: also check old regex for safety
     let trivial = isTrivialMessage(combinedMessage);
     const recentNames = recentProducts.map((p: any) => p.name);
     const followUp = isFollowUpMessage(combinedMessage, hasRecent, recentNames);
 
-    // "dale", "si", "listo" with recent products or cart = followup, not trivial
-    // These are purchase confirmations that need tool access
+    // Classifier overrides: purchase_confirm always needs tools
+    if (classification.primary_intent === 'purchase_confirm' || classification.primary_intent === 'purchase_intent') {
+      trivial = false;
+    }
+    // Old safeguard: "dale/si/listo" with products/cart = not trivial
     if (trivial && (hasRecent || hasCart)) {
       const isConfirmation = /^(dale|si|sí|listo|ok|okey|perfecto|genial|joya|buenisimo|excelente)\s*[!.?]*$/i.test(combinedMessage.trim());
       const isSaludo = /^(hola|holaa+|hi|hey|buenas|buen[oa]s?\s*d[ií]as?|buenas\s*tardes|buenas\s*noches|que\s*tal)\s*[!.?]*$/i.test(combinedMessage.trim());
       if (isConfirmation && !isSaludo) {
         trivial = false;
-        console.log(`[CLASSIFY] "${combinedMessage}" reclassified from trivial to followup (hasRecent=${hasRecent}, hasCart=${hasCart})`);
+        console.log(`[CLASSIFY] "${combinedMessage}" reclassified from trivial to followup`);
       }
     }
 
@@ -1405,7 +1443,9 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const newProducts = (trivial || followUp) ? [] : searchCatalog(combinedMessage, catalog);
     const contextOnly = dedupProducts(recentProducts).slice(0, 6);
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
-    const complexity: MessageComplexity = imageBase64 ? 'image' : trivial ? 'trivial' : followUp ? 'followup' : 'new_query';
+    // Use classifier-based complexity, fallback to old logic
+    const classifierComplexity = intentToComplexity[classification.primary_intent] || 'new_query';
+    const complexity: MessageComplexity = imageBase64 ? 'image' : trivial ? 'trivial' : classifierComplexity;
 
     // Tools extra por tenant (calculadora, etc)
     const extraTools: Anthropic.Tool[] = [];
