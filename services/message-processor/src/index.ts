@@ -1437,6 +1437,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       recentProducts,
       cart: existingCartForClassify,
       userMessage: combinedMessage,
+      searchCatalogFn: searchCatalog,
     });
     console.log(`[HANDLER] intent=${classification.primary_intent} products=${handlerCtx.productsToShow.length} maxPhotos=${handlerCtx.maxPhotos} needsSearch=${handlerCtx.needsToolSearch}`);
 
@@ -1455,7 +1456,8 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     console.log(`[CART] Loaded existing cart: ${existingCart.length} items`, existingCart.map((i: any) => i.productName));
 
     // Route: intents without tools → new redactor. Intents with tools → old pipeline.
-    const useNewRedactor = !handlerCtx.needsToolSearch && !['purchase_intent', 'purchase_confirm'].includes(classification.primary_intent);
+    // Only purchase intents need the old pipeline (for cart tools)
+    const useNewRedactor = !['purchase_intent', 'purchase_confirm'].includes(classification.primary_intent);
 
     let aiResponse: string;
     let productsShown: any[];

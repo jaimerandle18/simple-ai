@@ -26,8 +26,9 @@ export function handleIntent(args: {
   recentProducts: any[];
   cart: any[];
   userMessage: string;
+  searchCatalogFn: (query: string, catalog: any[], filters?: any) => any[];
 }): HandlerContext {
-  const { classification, catalog, recentProducts, cart } = args;
+  const { classification, catalog, recentProducts, cart, searchCatalogFn } = args;
   const intent = classification.primary_intent;
   const filters = classification.extracted_filters || {};
 
@@ -82,31 +83,55 @@ export function handleIntent(args: {
       };
     }
 
-    case 'product_search':
-      return {
-        productsToShow: [], // se cargan via tool call
-        maxPhotos: 3,
-        redactorInstruction: 'Mostra MAXIMO 3 productos. NOMBRA cada uno en el texto para que se envien las fotos. NO repitas precio ni descripcion (van en el caption). Usa formato INTRO/CIERRE.',
-        complexity: 'new_query',
-        needsToolSearch: true,
-        searchFilters: {
-          color: filters.color || undefined,
-          talle: filters.size || undefined,
-          categoria: filters.category || undefined,
-        },
-      };
+    case 'product_search': {
+      // Search with extracted filters — CODE decides what to show, not AI
+      const query = [filters.category, filters.color, ...(filters.productNameHints || [])].filter(Boolean).join(' ') || args.userMessage;
+      const searchResults = searchCatalogFn(query, catalog, {
+        categoria: filters.category || undefined,
+        color: filters.color || undefined,
+        talle: filters.size || undefined,
+      });
+      const topResults = searchResults.slice(0, 3);
+      console.log(`[HANDLER] product_search: query="${query}" filters=${JSON.stringify({color: filters.color, size: filters.size, category: filters.category})} → ${searchResults.length} results, showing ${topResults.length}`);
 
-    case 'product_specific':
+      if (topResults.length === 0) {
+        return {
+          productsToShow: [],
+          maxPhotos: 0,
+          redactorInstruction: `No hay productos con los filtros pedidos (${JSON.stringify(filters)}). Deci honestamente que no tenes eso y ofrece alternativas (otro color, otro talle, otra categoria).`,
+          complexity: 'followup',
+          needsToolSearch: false,
+        };
+      }
+
+      const names = topResults.map((p: any) => p.name);
       return {
-        productsToShow: [], // se busca via tool
-        maxPhotos: 1,
-        redactorInstruction: 'Da detalles del producto especifico que pidio (material, talles, por que lo recomendas). El caption ya tiene nombre+precio, complementa con info nueva.',
-        complexity: 'new_query',
-        needsToolSearch: true,
-        searchFilters: {
-          categoria: filters.category || undefined,
-        },
+        productsToShow: topResults,
+        maxPhotos: 3,
+        redactorInstruction: `Mostra estos ${topResults.length} productos. NOMBRA cada uno EXACTO: ${names.map(n => `"${n}"`).join(', ')}. NO repitas precio ni descripcion (van en el caption). Usa formato INTRO/CIERRE.`,
+        complexity: 'followup',
+        needsToolSearch: false,
       };
+    }
+
+    case 'product_specific': {
+      // Search for the specific product
+      const hints = filters.productNameHints || [];
+      const specificQuery = hints.join(' ') || args.userMessage;
+      const specificResults = searchCatalogFn(specificQuery, catalog, {
+        categoria: filters.category || undefined,
+      });
+      const match = specificResults[0];
+      return {
+        productsToShow: match ? [match] : [],
+        maxPhotos: 1,
+        redactorInstruction: match
+          ? `Da detalles de "${match.name}" (material, talles disponibles, por que lo recomendas). El caption ya tiene nombre+precio, complementa con info nueva.`
+          : `No encontre el producto que pidio. Deci honestamente y ofrece buscar otra cosa.`,
+        complexity: 'followup',
+        needsToolSearch: false,
+      };
+    }
 
     case 'product_followup':
       return {
