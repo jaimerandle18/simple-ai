@@ -16,6 +16,7 @@ import { loadContactMemory, updateContactMemory } from './lib/contact-memory';
 import { logTurnMetrics } from './lib/ab-testing';
 import { CALCULADORA_TOOL, calcularMateriales } from './lib/calculadora-blockplas';
 import { classifyIntent, type ClassifierResult } from './lib/classifier/intent-classifier';
+import { handleIntent, type HandlerContext } from './lib/handlers/intent-handlers';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -460,6 +461,7 @@ async function generateResponse(
   historySummary?: string,
   extraTools?: Anthropic.Tool[],
   cart?: any[],
+  redactorInstruction?: string,
 ): Promise<{ text: string; productsShown: EnrichedProduct[]; freshProducts: EnrichedProduct[]; cart?: any[] }> {
   const _cart: any[] = cart || [];
   const name = agentConfig.assistantName || 'el vendedor';
@@ -553,7 +555,8 @@ ${agentConfig.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA (usar en primer saludo
   const summaryBlock = historySummary
     ? `\n# RESUMEN DE CONVERSACIÓN PREVIA\n${historySummary}`
     : '';
-  const volatileBlock = memoryBlock + summaryBlock + sitePagesBlock + productsBlock + cartBlock;
+  const redactorBlock = redactorInstruction ? `\n\n# INSTRUCCION PARA ESTA RESPUESTA\n${redactorInstruction}` : '';
+  const volatileBlock = memoryBlock + summaryBlock + sitePagesBlock + productsBlock + cartBlock + redactorBlock;
 
   // System prompt como array con cache_control para Anthropic
   const systemPromptBlocks: Anthropic.TextBlockParam[] = [
@@ -1397,25 +1400,6 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const hasCart = existingCartForClassify.length > 0;
 
     // Use classifier to determine complexity (replaces old regex-based isTrivialMessage)
-    const intentToComplexity: Record<string, MessageComplexity> = {
-      greeting: 'trivial',
-      small_talk: 'trivial',
-      off_topic: 'trivial',
-      product_search: 'new_query',
-      product_specific: 'new_query',
-      product_followup: 'followup',
-      size_check: 'followup',
-      price_check: 'followup',
-      business_info: 'followup',
-      shipping_info: 'followup',
-      payment_info: 'followup',
-      returns_info: 'followup',
-      purchase_intent: 'new_query',
-      purchase_confirm: 'followup',
-      human_escalation: 'followup',
-      unclear: 'new_query',
-    };
-
     // Fallback: also check old regex for safety
     let trivial = isTrivialMessage(combinedMessage);
     const recentNames = recentProducts.map((p: any) => p.name);
@@ -1444,8 +1428,18 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const contextOnly = dedupProducts(recentProducts).slice(0, 6);
     const freshOnly = dedupProducts(newProducts).slice(0, 4);
     // Use classifier-based complexity, fallback to old logic
-    const classifierComplexity = intentToComplexity[classification.primary_intent] || 'new_query';
-    const complexity: MessageComplexity = imageBase64 ? 'image' : trivial ? 'trivial' : classifierComplexity;
+    // Handler: determines what to show, how many, and instructions for the redactor
+    const handlerCtx = handleIntent({
+      classification,
+      catalog,
+      recentProducts,
+      cart: existingCartForClassify,
+      userMessage: combinedMessage,
+    });
+    console.log(`[HANDLER] intent=${classification.primary_intent} products=${handlerCtx.productsToShow.length} maxPhotos=${handlerCtx.maxPhotos} needsSearch=${handlerCtx.needsToolSearch}`);
+
+    // Use handler's complexity, with image override
+    const complexity: MessageComplexity = imageBase64 ? 'image' : handlerCtx.complexity as MessageComplexity;
 
     // Tools extra por tenant (calculadora, etc)
     const extraTools: Anthropic.Tool[] = [];
@@ -1458,10 +1452,15 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const existingCart = (freshConv?.convState?.cart as any[]) || [];
     console.log(`[CART] Loaded existing cart: ${existingCart.length} items`, existingCart.map((i: any) => i.productName));
 
+    // If handler pre-selected products (e.g. price_check), inject them as context
+    const handlerProducts = handlerCtx.productsToShow.length > 0 ? handlerCtx.productsToShow : [];
+    const finalContext = handlerProducts.length > 0 ? dedupProducts([...handlerProducts, ...contextOnly]) : contextOnly;
+    const finalFresh = handlerProducts.length > 0 ? dedupProducts(handlerProducts) : freshOnly;
+
     const { text: aiResponse, productsShown, freshProducts, cart: updatedCart } = await generateResponse(
-      combinedMessage, history, contextOnly, freshOnly, catalog, agentCfg,
+      combinedMessage, history, finalContext, finalFresh, catalog, agentCfg,
       imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
-      complexity, historySummary, extraTools, existingCart,
+      complexity, historySummary, extraTools, existingCart, handlerCtx.redactorInstruction,
     );
     recordSuccess();
 
@@ -1510,7 +1509,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       if (!shouldSendPhoto(p, filterText, allCandidatePool)) continue;
       sentPhotoNames.add(nn);
       imagesToSend.push(p);
-      if (imagesToSend.length >= 3) break;
+      if (imagesToSend.length >= handlerCtx.maxPhotos) break;
     }
 
     // Build caption from onboarding config + size context
