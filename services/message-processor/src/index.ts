@@ -17,6 +17,7 @@ import { logTurnMetrics } from './lib/ab-testing';
 import { CALCULADORA_TOOL, calcularMateriales } from './lib/calculadora-blockplas';
 import { classifyIntent, type ClassifierResult } from './lib/classifier/intent-classifier';
 import { handleIntent, type HandlerContext } from './lib/handlers/intent-handlers';
+import { TestChatAdapter } from './lib/channels/test-chat';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -1702,92 +1703,23 @@ async function processTestMessage(body: {
   message: string;
 }) {
   const { tenantId, conversationId, contactPhone, contactName, message } = body;
-  const now = new Date().toISOString();
-  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // Contacto
-  const contactKey = keys.contact(tenantId, contactPhone);
-  const existingContact = await getItem(contactKey);
-  await putItem({
-    ...contactKey,
-    phone: contactPhone, contactPhone,
-    name: contactName || existingContact?.name || contactPhone,
-    tags: existingContact?.tags || [],
-    totalConversations: (existingContact?.totalConversations as number || 0) + (existingContact ? 0 : 1),
-    lastConversationAt: now, createdAt: existingContact?.createdAt || now, tenantId,
-  });
+  // Build NormalizedMessage for the unified pipeline
+  const normalizedMsg: NormalizedMessage = {
+    tenantId,
+    channel: 'test',
+    externalUserId: contactPhone,
+    externalMessageId: `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    senderName: contactName || contactPhone,
+    content: { text: message },
+    channelMetadata: { conversationId },
+    receivedAt: new Date().toISOString(),
+  };
 
-  // Guardar mensaje
-  await putItem({
-    ...keys.message(conversationId, now, msgId),
-    messageId: msgId, conversationId, tenantId,
-    direction: 'inbound', sender: 'contact', type: 'text',
-    content: message, timestamp: now,
-  });
+  // Use TestChatAdapter — writes to DynamoDB, doesn't send via WhatsApp/WAHA
+  const testAdapter = new TestChatAdapter();
 
-  const existingConv = await getItem(keys.conversation(tenantId, conversationId));
-  await putItem({
-    ...keys.conversation(tenantId, conversationId),
-    conversationId, tenantId, contactPhone,
-    contactName: contactName || contactPhone,
-    status: 'open', tags: existingConv?.tags || [],
-    assignedTo: 'bot', unreadCount: 1,
-    lastMessageAt: now, lastMessagePreview: message,
-    createdAt: existingConv?.createdAt || now,
-  });
-
-  const agent = await getItem(keys.agent(tenantId, 'main'));
-  if (!agent?.active) return;
-
-  // Historial optimizado
-  const historyItems = await queryItems(`CONV#${conversationId}`, 'MSG#', { limit: 20 });
-  historyItems.reverse();
-  const { history, summary: historySummary } = await buildOptimizedHistory(conversationId, historyItems);
-
-  try {
-    const agentCfg = agent.agentConfig || agent;
-    const catalog = await getCachedCatalog(tenantId);
-
-    // Cargar productos recientes del estado
-    let recentProducts: EnrichedProduct[] = (existingConv?.convState?.recentProducts || []) as EnrichedProduct[];
-    const trivial = isTrivialMessage(message);
-    const followUp = isFollowUpMessage(message, recentProducts.length > 0, recentProducts.map((p: any) => p.name));
-    if (trivial) {
-      const isSaludo = /^(hola|holaa+|hi|hey|buenas)/i.test(message.trim());
-      if (isSaludo) recentProducts = [];
-    }
-    const newProducts = (trivial || followUp) ? [] : searchCatalog(message, catalog);
-    const contextOnly = dedupProducts(recentProducts).slice(0, 6);
-    const freshOnly = dedupProducts(newProducts).slice(0, 4);
-
-    const complexity: MessageComplexity = trivial ? 'trivial' : followUp ? 'followup' : 'new_query';
-    const { text: aiResponse, productsShown } = await generateResponse(
-      message, history, contextOnly, freshOnly, catalog, agentCfg, undefined, complexity, historySummary,
-    );
-
-    const cleanResponse = formatOutbound(aiResponse, 'whatsapp');
-    const productsToSave = dedupProducts(productsShown).slice(0, 8);
-    const replyNow = new Date().toISOString();
-    const replyId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-    await putItem({
-      ...keys.message(conversationId, replyNow, replyId),
-      messageId: replyId, conversationId, tenantId,
-      direction: 'outbound', sender: 'bot', type: 'text',
-      content: cleanResponse, timestamp: replyNow, status: 'sent',
-    });
-
-    await putItem({
-      ...keys.conversation(tenantId, conversationId),
-      conversationId, tenantId, contactPhone,
-      contactName: contactName || contactPhone,
-      status: 'open', tags: existingConv?.tags || [],
-      assignedTo: 'bot', unreadCount: 0,
-      lastMessageAt: replyNow, lastMessagePreview: cleanResponse.slice(0, 100),
-      createdAt: existingConv?.createdAt || now,
-      convState: { recentProducts: productsToSave },
-    });
-  } catch (err) {
-    console.error('Pipeline error:', err);
-  }
+  // Process through the SAME pipeline as WhatsApp (classifier + handlers + redactor)
+  console.log(`[TEST-CHAT] Processing via unified pipeline: "${message.slice(0, 80)}"`);
+  await processNormalizedMessage(normalizedMsg, testAdapter);
 }

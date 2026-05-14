@@ -10,7 +10,7 @@
 // TIPOS
 // ============================================================
 
-export type ChannelType = 'whatsapp' | 'whatsapp_waha' | 'whatsapp_evolution' | 'instagram' | 'facebook';
+export type ChannelType = 'whatsapp' | 'whatsapp_waha' | 'whatsapp_evolution' | 'instagram' | 'facebook' | 'test';
 
 export interface NormalizedMessage {
   tenantId: string;

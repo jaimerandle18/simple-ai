@@ -6,9 +6,11 @@ import Anthropic from '@anthropic-ai/sdk';
 import Fuse from 'fuse.js';
 import { SchedulerClient, CreateScheduleCommand, DeleteScheduleCommand } from '@aws-sdk/client-scheduler';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
 const scheduler = new SchedulerClient({});
 const lambdaClient = new LambdaClient({});
+const sqsClient = new SQSClient({});
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -616,160 +618,82 @@ export async function handleAgents(event: APIGatewayProxyEventV2) {
   }
 
   // ============================================================
-  // POST /agents/test-chat — MISMO PIPELINE QUE WHATSAPP
+  // POST /agents/test-chat — UNIFIED PIPELINE via SQS → message-processor
+  // Sends message to SQS as test_message, polls DynamoDB for response.
   // ============================================================
   if (method === 'POST' && path === '/agents/test-chat') {
     const body = JSON.parse(event.body || '{}');
-    const { message, history, recentProductNames } = body;
+    const { message } = body;
     if (!message) return error('message is required');
 
-    const agent = await getItem(keys.agent(tenantId, 'main'));
-    const agentCfg = agent?.agentConfig || {};
-    const catalog = (await queryItems(`TENANT#${tenantId}`, 'PRODUCT#', { limit: 500 }))
-      .filter((p: any) => p.name && p.name.length > 2);
+    const contactPhone = `test_${tenantId.slice(0, 8)}`;
+    const conversationId = `conv_test_${tenantId.slice(0, 12)}`;
+    const now = new Date().toISOString();
 
-    const historyMsgs = (history || []) as { role: string; content: string }[];
+    // Find existing conversation for this test contact, or note we need a new one
+    const existingConvs = (await queryItems(`TENANT#${tenantId}`, 'CONV#') as any[])
+      .filter((c: any) => c.contactPhone === contactPhone && c.status !== 'archived');
+    const existingConvId = existingConvs[0]?.conversationId;
+    const lookupConvId = existingConvId || conversationId;
+    const beforeMsgs = await queryItems(`CONV#${lookupConvId}`, 'MSG#', { limit: 1 });
+    const lastMsgBefore = beforeMsgs[0] as any;
 
-    // Rebuild recent products from names
-    const recentProducts: any[] = [];
-    if (recentProductNames?.length > 0) {
-      for (const name of recentProductNames) {
-        const found = catalog.find((p: any) => p.name === name);
-        if (found) recentProducts.push(found);
+    // Send to SQS → message-processor handles via real pipeline (classifier + handlers)
+    const queueUrl = process.env.INCOMING_MESSAGES_QUEUE_URL;
+    if (!queueUrl) return error('Queue not configured', 500);
+
+    await sqsClient.send(new SendMessageCommand({
+      QueueUrl: queueUrl,
+      MessageBody: JSON.stringify({
+        type: 'test_message',
+        tenantId,
+        conversationId,
+        contactPhone,
+        contactName: 'Test Chat',
+        message,
+      }),
+    }));
+
+    // Poll DynamoDB for the bot's response (max 30s)
+    const startPoll = Date.now();
+    const POLL_TIMEOUT = 30000;
+    const POLL_INTERVAL = 1000;
+
+    while (Date.now() - startPoll < POLL_TIMEOUT) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+
+      // Find the conversation (may have been created by message-processor)
+      const convs = (await queryItems(`TENANT#${tenantId}`, 'CONV#') as any[])
+        .filter((c: any) => c.contactPhone === contactPhone && c.status !== 'archived');
+      const activeConvId = convs[0]?.conversationId || lookupConvId;
+      const msgs = await queryItems(`CONV#${activeConvId}`, 'MSG#', { limit: 5 });
+      // Find outbound messages newer than what we had before
+      const botMsgs = (msgs as any[]).filter(m =>
+        m.direction === 'outbound' && m.sender === 'bot' &&
+        (!lastMsgBefore || m.SK > lastMsgBefore.SK)
+      );
+
+      if (botMsgs.length > 0) {
+        // Collect text replies and images
+        const textMsgs = botMsgs.filter((m: any) => m.type === 'text');
+        const imageMsgs = botMsgs.filter((m: any) => m.type === 'image');
+
+        const reply = textMsgs.map((m: any) => m.content).join('\n\n') || 'Sin respuesta';
+        const images = imageMsgs.map((m: any) => ({
+          url: m.imageUrl || '',
+          caption: m.content || '',
+          name: '',
+        }));
+
+        // Get product names from conversation state
+        const conv = await getItem(keys.conversation(tenantId, activeConvId));
+        const productNames = ((conv?.convState as any)?.recentProducts || []).map((p: any) => p.name);
+
+        return json({ reply, images, productNames });
       }
     }
 
-    const trivial = isTrivialMessage(message);
-    const followUpMsg = isFollowUp(message, recentProducts.length > 0);
-    const newProducts = (trivial || followUpMsg) ? [] : searchCatalog(message, catalog);
-
-    const dedup = (arr: any[]) => {
-      const seen = new Set<string>();
-      return arr.filter((p: any) => { const k = (p.productId || p.name).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-    };
-
-    const contextOnly = dedup(recentProducts).slice(0, 6);
-    const freshOnly = dedup(newProducts).slice(0, 4);
-    const allContext = dedup([...contextOnly, ...freshOnly]);
-
-    const catCounts: Record<string, number> = {};
-    for (const p of catalog) { if ((p as any).category) catCounts[(p as any).category] = (catCounts[(p as any).category] || 0) + 1; }
-    const categories = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(', ');
-
-    const name = agentCfg.assistantName || 'el vendedor';
-    const web = agentCfg.websiteUrl || '';
-
-    const HARDCODED_RULES_TC = `1. SOLO mencionás productos de PRODUCTOS_DISPONIBLES. NUNCA inventes.
-2. NUNCA digas "no tengo eso cargado" si hay productos en contexto.
-3. NUNCA cierres con "¿algo más?". Pregunta específica.
-4. Precio formateado: $XX.XXX
-5. Las fotos se envían AUTOMÁTICAMENTE de los productos que nombrás con datos concretos.
-6. USO DE buscar_productos: solo si el cliente pide categoría/producto NUEVO.
-7. PREGUNTAS COMPARATIVAS: compará por specs de PRODUCTOS_DISPONIBLES.
-8. Si el cliente quiere comprar, pedile los datos.
-9. Si insulta o pide humano: "Te paso con alguien del equipo."`;
-
-    const activeRules = agentCfg.extraInstructions || HARDCODED_RULES_TC;
-
-    // === PROMPT CACHING ===
-    const stableBlock = `Sos un vendedor virtual por WhatsApp de un comercio argentino.
-
-# TONO
-Argentino casual, vos, conciso. Máx 1 emoji. WhatsApp real, corto. Máximo 4-5 líneas.
-NUNCA uses signos de apertura (¡ ¿). Solo usá los de cierre (! ?).
-
-# REGLAS BASE
-${HARDCODED_RULES_TC}`;
-
-    const tenantBlock = `# IDENTIDAD
-Nombre: ${name}${web ? `. Web: ${web}` : ''}
-
-${activeRules !== HARDCODED_RULES_TC ? `# REGLAS DEL NEGOCIO\n${activeRules}` : ''}
-
-# CATEGORÍAS
-${categories}
-${agentCfg.promotions ? `\n# PROMOCIONES\n${agentCfg.promotions}` : ''}
-${agentCfg.businessHours ? `\n# HORARIO\n${agentCfg.businessHours}` : ''}
-${agentCfg.welcomeMessage ? `\n# MENSAJE DE BIENVENIDA\n${agentCfg.welcomeMessage}` : ''}`;
-
-    const productsBlockTC = `# PRODUCTOS_DISPONIBLES
-${allContext.length > 0 ? formatProductsYAML(allContext) : '(ninguno en contexto)'}`;
-
-    const systemPromptBlocks: Anthropic.TextBlockParam[] = [
-      { type: 'text', text: stableBlock, cache_control: { type: 'ephemeral' } } as any,
-      { type: 'text', text: tenantBlock, cache_control: { type: 'ephemeral' } } as any,
-      { type: 'text', text: productsBlockTC },
-    ];
-
-    // Build messages
-    const msgs: Anthropic.MessageParam[] = [];
-    for (const m of historyMsgs) {
-      const role = m.role === 'assistant' ? 'assistant' : 'user';
-      if (msgs.length > 0 && msgs[msgs.length - 1].role === role) {
-        msgs[msgs.length - 1].content += '\n' + m.content;
-      } else {
-        msgs.push({ role, content: m.content });
-      }
-    }
-    if (msgs.length > 0 && msgs[0].role === 'assistant') msgs.shift();
-    if (msgs.length === 0 || msgs[msgs.length - 1].role !== 'user') {
-      msgs.push({ role: 'user', content: message });
-    }
-
-    try {
-      let allShown = [...allContext];
-      let fresh = [...freshOnly];
-
-      for (let round = 0; round < 3; round++) {
-        const res = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6', max_tokens: 500,
-          system: systemPromptBlocks, tools: TOOLS, messages: msgs,
-        });
-
-        if (res.stop_reason === 'end_turn') {
-          const textBlock = res.content.find(b => b.type === 'text');
-          const reply = textBlock ? textBlock.text : 'Disculpá, tuve un problema.';
-
-          // Images: only fresh products mentioned by name
-          const images: { url: string; caption: string; name: string }[] = [];
-          const replyLower = reply.toLowerCase();
-          const recentNorm = new Set(recentProducts.map((p: any) => p.name.toLowerCase().trim()));
-          const stopW = new Set(['para','con','sin','remera','musculosa','campera','pantalon','oversize','underwave','hoodie','buzo','short','camisa']);
-
-          for (const p of fresh) {
-            if (!p.imageUrl || !p.imageUrl.startsWith('http')) continue;
-            if (recentNorm.has(p.name.toLowerCase().trim())) continue;
-            const nameWords = p.name.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3 && !stopW.has(w));
-            if (nameWords.some((w: string) => replyLower.includes(w))) {
-              images.push({ url: p.imageUrl, caption: buildCaption(p, (agent as any)?.onboardingV2), name: p.name });
-            }
-          }
-
-          return json({ reply, images: images.slice(0, 3), productNames: allShown.map((p: any) => p.name) });
-        }
-
-        if (res.stop_reason === 'tool_use') {
-          msgs.push({ role: 'assistant', content: res.content });
-          const toolResults: Anthropic.ToolResultBlockParam[] = [];
-          for (const tu of res.content.filter(b => b.type === 'tool_use')) {
-            if (tu.type !== 'tool_use') continue;
-            const input = tu.input as { query: string; categoria?: string };
-            const found = searchCatalog(input.query, catalog, input.categoria);
-            allShown = [...allShown, ...found];
-            fresh = [...fresh, ...found];
-            toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: found.length > 0 ? formatProductsYAML(found) : `No encontré para "${input.query}". Categorías: ${categories}` });
-          }
-          msgs.push({ role: 'user', content: toolResults });
-          continue;
-        }
-
-        return json({ reply: 'Error', images: [], productNames: [] });
-      }
-      return json({ reply: 'Error procesando', images: [], productNames: [] });
-    } catch (err: any) {
-      console.error('test-chat error:', err);
-      return error('Error: ' + err.message, 500);
-    }
+    return json({ reply: 'Timeout esperando respuesta del bot', images: [], productNames: [] });
   }
 
   // ============================================================
