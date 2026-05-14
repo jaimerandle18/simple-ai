@@ -1,7 +1,7 @@
-export interface VerticalGlossary {
-  productTypes: string[];
-  attributes: string[];
-  commonQuestions: string[];
+export interface VerticalContextualKnowledge {
+  specsThatMatter: string[];
+  commonCustomerNeeds: string[];
+  safetyConsiderations: string[];
 }
 
 export interface FilterFieldDef {
@@ -13,9 +13,9 @@ export interface FilterFieldDef {
 export interface VerticalPackage {
   id: string;
   name: string;
-  glossary: VerticalGlossary;
+  contextualKnowledge: VerticalContextualKnowledge;
   filterSchema: Record<string, FilterFieldDef>;
   promptContext: string;
   captionBuilder?: (product: any) => string;
-  attributeExtractor?: (rawProduct: any) => Record<string, any>;
+  attributePresenter?: (attributes: Record<string, any>) => string;
 }
