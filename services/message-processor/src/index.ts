@@ -274,6 +274,7 @@ function isTrivialMessage(message: string): boolean {
 // ============================================================
 // DETECTAR SEGUIMIENTOS (preguntas sobre productos ya mostrados)
 // ============================================================
+/** @deprecated Replaced by intent classifier. Kept as safety fallback. Remove in Fase 4b if classifier handles all cases. */
 function isFollowUpMessage(message: string, hasRecentProducts: boolean, recentNames?: string[]): boolean {
   if (!hasRecentProducts) return false;
 
@@ -456,6 +457,12 @@ function chooseMaxRounds(complexity: MessageComplexity): number {
   return 5;                                   // new_query (carrito: buscar + agregar varios + link)
 }
 
+/**
+ * @deprecated Replaced by classifier+handler+redactor architecture.
+ * Still used for purchase_intent and purchase_confirm (need cart tools).
+ * TODO Fase 5: refactor cart tools to work with redactor.
+ * If [PIPELINE_OLD] logs show 0 non-purchase usage after 7 days, can simplify.
+ */
 async function generateResponse(
   userMessage: string,
   history: Anthropic.MessageParam[],
@@ -997,6 +1004,7 @@ async function buildOptimizedHistory(
 // ============================================================
 // HELPERS
 // ============================================================
+/** @deprecated Dead code — never called. Remove in Fase 4b. */
 async function loadFilesContext(attachedFiles: any[]): Promise<string> {
   if (!attachedFiles || attachedFiles.length === 0) return '';
   const texts: string[] = [];
@@ -1471,7 +1479,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
 
     if (useNewRedactor) {
       // NEW: structured redactor (no tools, no decisions by AI)
-      console.log(`[PIPELINE] Using NEW redactor for intent=${classification.primary_intent}`);
+      console.log(`[PIPELINE_NEW] intent=${classification.primary_intent}`);
       const result = await generateRedactedResponse({
         userMessage: combinedMessage,
         history,
@@ -1489,7 +1497,9 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
       updatedCart = existingCart;
     } else {
       // OLD: full pipeline with tools (buscar_productos, agregar_al_carrito, generar_link_compra)
-      console.log(`[PIPELINE] Using OLD pipeline with tools for intent=${classification.primary_intent}`);
+      // IMPORTANT: purchase_intent and purchase_confirm still use this. NOT migrated yet.
+      // TODO Fase 5: refactor cart tools to work with structured redactor.
+      console.log(`[PIPELINE_OLD] intent=${classification.primary_intent} reason=cart_tools_required`);
       const handlerProducts = handlerCtx.productsToShow.length > 0 ? handlerCtx.productsToShow : [];
       const finalContext = handlerProducts.length > 0 ? dedupProducts([...handlerProducts, ...contextOnly]) : contextOnly;
       const finalFresh = handlerProducts.length > 0 ? dedupProducts(handlerProducts) : freshOnly;
