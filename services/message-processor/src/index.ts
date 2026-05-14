@@ -18,6 +18,7 @@ import { CALCULADORA_TOOL, calcularMateriales } from './lib/calculadora-blockpla
 import { classifyIntent, type ClassifierResult } from './lib/classifier/intent-classifier';
 import { handleIntent, type HandlerContext } from './lib/handlers/intent-handlers';
 import { TestChatAdapter } from './lib/channels/test-chat';
+import { generateRedactedResponse } from './lib/redactor/generate';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -1453,16 +1454,49 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
     const existingCart = (freshConv?.convState?.cart as any[]) || [];
     console.log(`[CART] Loaded existing cart: ${existingCart.length} items`, existingCart.map((i: any) => i.productName));
 
-    // If handler pre-selected products (e.g. price_check), inject them as context
-    const handlerProducts = handlerCtx.productsToShow.length > 0 ? handlerCtx.productsToShow : [];
-    const finalContext = handlerProducts.length > 0 ? dedupProducts([...handlerProducts, ...contextOnly]) : contextOnly;
-    const finalFresh = handlerProducts.length > 0 ? dedupProducts(handlerProducts) : freshOnly;
+    // Route: intents without tools → new redactor. Intents with tools → old pipeline.
+    const useNewRedactor = !handlerCtx.needsToolSearch && !['purchase_intent', 'purchase_confirm'].includes(classification.primary_intent);
 
-    const { text: aiResponse, productsShown, freshProducts, cart: updatedCart } = await generateResponse(
-      combinedMessage, history, finalContext, finalFresh, catalog, agentCfg,
-      imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
-      complexity, historySummary, extraTools, existingCart, handlerCtx.redactorInstruction,
-    );
+    let aiResponse: string;
+    let productsShown: any[];
+    let freshProducts: any[];
+    let updatedCart: any[] | undefined;
+
+    if (useNewRedactor) {
+      // NEW: structured redactor (no tools, no decisions by AI)
+      console.log(`[PIPELINE] Using NEW redactor for intent=${classification.primary_intent}`);
+      const result = await generateRedactedResponse({
+        userMessage: combinedMessage,
+        history,
+        handlerCtx,
+        agentConfig: agentCfg,
+        contactMemory: agentCfg._contactMemory,
+        historySummary,
+        productsContext: contextOnly.length > 0 ? `# PRODUCTOS_DISPONIBLES\n${formatProductsForPrompt(contextOnly)}` : undefined,
+        cartContext: existingCart.length > 0 ? `# CARRITO\n${existingCart.map((i: any) => `${i.productName} x${i.cantidad}`).join(', ')}` : undefined,
+        imageData: imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
+      });
+      aiResponse = result.text;
+      productsShown = result.productsShown;
+      freshProducts = result.freshProducts;
+      updatedCart = existingCart;
+    } else {
+      // OLD: full pipeline with tools (buscar_productos, agregar_al_carrito, generar_link_compra)
+      console.log(`[PIPELINE] Using OLD pipeline with tools for intent=${classification.primary_intent}`);
+      const handlerProducts = handlerCtx.productsToShow.length > 0 ? handlerCtx.productsToShow : [];
+      const finalContext = handlerProducts.length > 0 ? dedupProducts([...handlerProducts, ...contextOnly]) : contextOnly;
+      const finalFresh = handlerProducts.length > 0 ? dedupProducts(handlerProducts) : freshOnly;
+
+      const result = await generateResponse(
+        combinedMessage, history, finalContext, finalFresh, catalog, agentCfg,
+        imageBase64 ? { base64: imageBase64, mimeType: 'image/jpeg' } : undefined,
+        complexity, historySummary, extraTools, existingCart, handlerCtx.redactorInstruction,
+      );
+      aiResponse = result.text;
+      productsShown = result.productsShown;
+      freshProducts = result.freshProducts;
+      updatedCart = result.cart;
+    }
     recordSuccess();
 
     // Parse INTRO/CIERRE structure (explicit tags OR auto-split on last question)
