@@ -5,6 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { buildRedactorPrompt } from './prompt-builder';
 import type { HandlerContext } from '../handlers/intent-handlers';
+import type { VerticalPackage } from '../verticals/types';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -13,6 +14,7 @@ export async function generateRedactedResponse(args: {
   history: Anthropic.MessageParam[];
   handlerCtx: HandlerContext;
   agentConfig: any;
+  verticalPackage?: VerticalPackage;
   contactMemory?: string;
   historySummary?: string;
   productsContext?: string;
@@ -27,6 +29,7 @@ export async function generateRedactedResponse(args: {
   const systemPrompt = buildRedactorPrompt({
     handlerCtx,
     agentConfig: args.agentConfig,
+    verticalPackage: args.verticalPackage,
     contactMemory: args.contactMemory,
     historySummary: args.historySummary,
     productsContext: args.productsContext,
@@ -58,7 +61,7 @@ export async function generateRedactedResponse(args: {
     }
   }
 
-  console.log(`[REDACTOR] model=${model} intent=${handlerCtx.redactorInstruction.slice(0, 60)} maxRounds=${maxRounds} products=${handlerCtx.productsToShow.length}`);
+  console.log(`[REDACTOR] model=${model} vertical=${args.verticalPackage?.id || 'none'} maxRounds=${maxRounds} products=${handlerCtx.productsToShow.length}`);
 
   // Tools: only if handler says we need them (purchase_intent, purchase_confirm, product_search with needsToolSearch)
   const useTools = maxRounds > 0 && args.tools && args.tools.length > 0;

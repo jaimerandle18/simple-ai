@@ -1491,6 +1491,7 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
         history,
         handlerCtx,
         agentConfig: agentCfg,
+        verticalPackage: verticalPkg,
         contactMemory: agentCfg._contactMemory,
         historySummary,
         productsContext: contextOnly.length > 0 ? `# PRODUCTOS_DISPONIBLES\n${formatProductsForPrompt(contextOnly)}` : undefined,

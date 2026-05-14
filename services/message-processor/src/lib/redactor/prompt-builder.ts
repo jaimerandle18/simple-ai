@@ -4,10 +4,12 @@
  * El redactor NUNCA decide qué productos mostrar. Solo redacta.
  */
 import type { HandlerContext } from '../handlers/intent-handlers';
+import type { VerticalPackage } from '../verticals/types';
 
 export function buildRedactorPrompt(args: {
   handlerCtx: HandlerContext;
   agentConfig: any;
+  verticalPackage?: VerticalPackage;
   contactMemory?: string;
   historySummary?: string;
   productsContext?: string;
@@ -58,7 +60,12 @@ ${useEmojis ? 'Emoji opcional, maximo 1.' : 'Sin emojis.'}`);
 
 7. DIRECCION INVIOLABLE: solo mencionas la direccion si esta en INFO DEL NEGOCIO. Si no esta, decis "te confirmo la direccion" o escala. NUNCA inventes ciudad ni barrio.`);
 
-  // BLOQUE 3: Instruccion del handler (lo que tiene que hacer AHORA)
+  // BLOQUE 3: Contexto del rubro (del paquete vertical)
+  if (args.verticalPackage?.promptContext) {
+    parts.push(args.verticalPackage.promptContext);
+  }
+
+  // BLOQUE 4: Instruccion del handler (lo que tiene que hacer AHORA)
   parts.push(`# TU TAREA EN ESTA RESPUESTA
 ${handlerCtx.redactorInstruction}`);
 
