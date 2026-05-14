@@ -53,15 +53,22 @@ export function handleIntent(args: {
 
     case 'price_check': {
       const range = filters.priceRange;
-      let sorted = catalog.filter(p => p.priceNum > 0);
+      let sorted = catalog.filter((p: any) => p.priceNum > 0);
 
-      // Apply category filter if extracted
+      // Apply category filter if extracted — match with fuzzy plural/singular
       if (filters.category) {
         const catLower = filters.category.toLowerCase();
-        const filtered = sorted.filter(p =>
-          (p.category || '').toLowerCase().includes(catLower) ||
-          (p.name || '').toLowerCase().includes(catLower)
-        );
+        // Generate variants: buzos→buzo, remeras→remera, pantalones→pantalon
+        const catVariants = [catLower];
+        if (catLower.endsWith('s')) catVariants.push(catLower.slice(0, -1));
+        if (catLower.endsWith('es')) catVariants.push(catLower.slice(0, -2));
+
+        const filtered = sorted.filter((p: any) => {
+          const name = (p.name || '').toLowerCase();
+          const cat = (p.category || '').toLowerCase();
+          return catVariants.some(v => name.includes(v) || cat.includes(v));
+        });
+        console.log(`[HANDLER price_check] category="${catLower}" variants=[${catVariants}] pool: ${sorted.length} → ${filtered.length}`);
         if (filtered.length > 0) sorted = filtered;
       }
 
@@ -72,12 +79,13 @@ export function handleIntent(args: {
       }
 
       const winner = sorted[0];
+      if (winner) console.log(`[HANDLER price_check] winner="${winner.name}" price=$${winner.priceNum}`);
       return {
         productsToShow: winner ? [winner] : [],
         maxPhotos: 1,
         redactorInstruction: winner
-          ? `Mostra SOLO este producto: "${winner.name}". Da detalles (material, talles). NO muestres otros. El caption de la foto ya tiene nombre+precio, no los repitas en el texto. Usa formato INTRO/CIERRE.`
-          : 'No se encontro un producto que matchee. Deci honestamente que no tenes y ofrece alternativas.',
+          ? `Mostra SOLO este producto: "${winner.name}". Es el ${range === 'cheap' || range === 'lowest' ? 'mas barato' : 'mas caro'}${filters.category ? ' de ' + filters.category : ''}. Da detalles (material, talles). NO muestres otros. NO digas "solo tengo este". El cliente pidio UNO, devuelve UNO naturalmente. El caption ya tiene nombre+precio.`
+          : `No se encontro un producto${filters.category ? ' en ' + filters.category : ''} que matchee. Deci honestamente que no tenes y ofrece alternativas.`,
         complexity: 'followup',
         needsToolSearch: false,
       };
