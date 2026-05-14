@@ -296,15 +296,23 @@ export default function OnboardingPage() {
   }, [config]);
 
   const isCurrentSectionCompleted = currentSection ? sectionStates[currentSection.id] === 'completed' : false;
+  const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
 
   const setValue = (fieldId: string, value: any) => {
-    // If section already completed, ask for confirmation first
-    if (isCurrentSectionCompleted) {
-      const field = FIELDS.find(f => f.id === fieldId);
+    const field = FIELDS.find(f => f.id === fieldId);
+    const isTextInput = field?.type === 'simple_text' || field?.type === 'ai_text' || field?.type === 'url' || field?.type === 'time' || field?.type === 'number';
+
+    if (isCurrentSectionCompleted && !isTextInput) {
+      // Toggle/select/multi_select: show confirmation modal (single action)
       setPendingEdit({ fieldId, fieldLabel: field?.label || fieldId, value, oldValue: config[fieldId] });
       return;
     }
+
+    // Text inputs: edit freely, track as dirty for "Guardar cambio" button
     applyValue(fieldId, value);
+    if (isCurrentSectionCompleted) {
+      setDirtyFields(prev => new Set(prev).add(fieldId));
+    }
   };
 
   const applyValue = (fieldId: string, value: any) => {
@@ -345,6 +353,24 @@ export default function OnboardingPage() {
   };
 
   const cancelEdit = () => setPendingEdit(null);
+
+  const saveDirtyField = async (fieldId: string) => {
+    if (!tenantId || !currentSection) return;
+    setSaving(true);
+    const fieldValues: Record<string, any> = {};
+    for (const f of sectionFields) {
+      if (isFieldVisible(f)) {
+        fieldValues[f.id] = config[f.id] ?? (f.type === 'toggle' ? false : f.type === 'multi_select' ? [] : '');
+      }
+    }
+    if (config.caption_order) fieldValues.caption_order = config.caption_order;
+    try {
+      await api('/onboarding/v2/save-section', { method: 'POST', tenantId, body: { sectionId: currentSection.id, fields: fieldValues } });
+      showToast('success', `${currentSection.label} actualizado`);
+      setDirtyFields(prev => { const n = new Set(prev); n.delete(fieldId); return n; });
+    } catch { showToast('error', 'Error al guardar'); }
+    setSaving(false);
+  };
 
   const improveField = async (fieldId: string) => {
     const value = config[fieldId];
@@ -632,6 +658,12 @@ export default function OnboardingPage() {
                   )}
 
                   {errors[field.id] && <p className="text-xs text-red-500 mt-1">{errors[field.id]}</p>}
+                  {dirtyFields.has(field.id) && (
+                    <button onClick={() => saveDirtyField(field.id)} disabled={saving}
+                      className="mt-1.5 text-xs bg-primary-600 text-white px-3 py-1 rounded-md hover:bg-primary-700 disabled:opacity-50">
+                      {saving ? 'Guardando...' : 'Guardar cambio'}
+                    </button>
+                  )}
                 </div>
               );
             })}
