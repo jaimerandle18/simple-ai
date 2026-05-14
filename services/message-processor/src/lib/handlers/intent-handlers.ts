@@ -85,7 +85,9 @@ export function handleIntent(args: {
 
     case 'product_search': {
       // Search with extracted filters — CODE decides what to show, not AI
-      const query = [filters.category, filters.color, ...(filters.productNameHints || [])].filter(Boolean).join(' ') || args.userMessage;
+      // Query: use hints or category. If only color filter, use empty query to get all colored products.
+      const hints = (filters.productNameHints || []).filter(Boolean);
+      const query = hints.length > 0 ? hints.join(' ') : (filters.category || '');
       const searchResults = searchCatalogFn(query, catalog, {
         categoria: filters.category || undefined,
         color: filters.color || undefined,

@@ -161,6 +161,11 @@ function searchCatalog(query: string, catalog: EnrichedProduct[], filters?: { ca
     if (filtered.length > 0) pool = filtered;
   }
 
+  // If query is empty but filters narrowed the pool, return the filtered pool directly
+  if (!query || query.trim().length === 0) {
+    return pool.slice(0, 6);
+  }
+
   // Fuse.js search on filtered pool
   const fuse = new Fuse(pool, {
     keys: [
