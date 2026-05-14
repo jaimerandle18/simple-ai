@@ -19,6 +19,7 @@ import { classifyIntent, type ClassifierResult } from './lib/classifier/intent-c
 import { handleIntent, type HandlerContext } from './lib/handlers/intent-handlers';
 import { TestChatAdapter } from './lib/channels/test-chat';
 import { generateRedactedResponse } from './lib/redactor/generate';
+import { loadVerticalPackage } from './lib/verticals';
 
 const s3 = new S3Client({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
@@ -1393,6 +1394,11 @@ async function processNormalizedMessage(msg: NormalizedMessage, adapter: Channel
   try {
     const agentCfg = agent.agentConfig || agent;
     const catalog = await getCachedCatalog(tenantId);
+
+    // Load vertical package (only logging for now — integration in Fase 2)
+    const rubro = (agent as any).onboardingV2?.business_rubro || (agent as any).businessConfig?.business?.rubro || agentCfg.business?.rubro;
+    const verticalPkg = loadVerticalPackage(rubro);
+    console.log(`[VERTICAL] tenant=${tenantId.slice(0, 8)} rubro=${rubro || 'none'} package=${verticalPkg.id}`);
 
     const contactMemory = await loadContactMemory(tenantId, externalUserId);
     if (contactMemory) agentCfg._contactMemory = contactMemory;
