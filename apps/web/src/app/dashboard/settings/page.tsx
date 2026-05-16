@@ -42,11 +42,15 @@ export default function SettingsPage() {
       const res = await fetch('/api/proxy/channels/waha/status', { headers, signal });
       const data = await res.json();
       const s: WahaStatus = data.status || 'NOT_CONFIGURED';
-      setWahaStatus(s);
-      if (data.phone) setPhoneNumber(data.phone);
-      if (data.pushName) setPushName(data.pushName);
-      if (s === 'SCAN_QR_CODE') fetchQr();
-      if (s === 'STARTING' || s === 'SCAN_QR_CODE') startPolling();
+      if (s === 'WORKING') {
+        setWahaStatus('WORKING');
+        if (data.phone) setPhoneNumber(data.phone);
+        if (data.pushName) setPushName(data.pushName);
+      } else {
+        // Sesiones pendientes (SCAN_QR_CODE, STARTING, STOPPED, FAILED)
+        // se ignoran al cargar — el usuario debe iniciar manualmente
+        setWahaStatus('NOT_CONFIGURED');
+      }
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
     }
