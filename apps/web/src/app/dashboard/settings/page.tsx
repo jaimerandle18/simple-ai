@@ -16,6 +16,7 @@ export default function SettingsPage() {
   const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
   const [pushName, setPushName] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const initFetchAbortRef = useRef<AbortController | null>(null);
 
   const tenantId = (session?.user as any)?.tenantId;
   const headers = { 'Content-Type': 'application/json', 'x-tenant-id': tenantId || '' };
@@ -23,14 +24,17 @@ export default function SettingsPage() {
   // Cargar estado al montar
   useEffect(() => {
     if (!tenantId) return;
-    fetchStatus();
+    const ctrl = new AbortController();
+    initFetchAbortRef.current = ctrl;
+    fetchStatus(ctrl.signal);
+    return () => ctrl.abort();
   }, [tenantId]);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  async function fetchStatus() {
+  async function fetchStatus(signal?: AbortSignal) {
     try {
-      const res = await fetch('/api/proxy/channels/waha/status', { headers });
+      const res = await fetch('/api/proxy/channels/waha/status', { headers, signal });
       const data = await res.json();
       const s: WahaStatus = data.status || 'NOT_CONFIGURED';
       setWahaStatus(s);
@@ -38,7 +42,9 @@ export default function SettingsPage() {
       if (data.pushName) setPushName(data.pushName);
       if (s === 'SCAN_QR_CODE') fetchQr();
       if (s === 'STARTING' || s === 'SCAN_QR_CODE') startPolling();
-    } catch {}
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+    }
   }
 
   async function fetchQr() {
@@ -79,6 +85,9 @@ export default function SettingsPage() {
   }
 
   async function handleConnect() {
+    if (!tenantId) return;
+    // Abortar cualquier fetchStatus inicial en vuelo para evitar que pise el estado STARTING
+    initFetchAbortRef.current?.abort();
     setConnecting(true);
     setError('');
     setQrCode(null);
