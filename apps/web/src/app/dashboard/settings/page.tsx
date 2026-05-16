@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [pushName, setPushName] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const initFetchAbortRef = useRef<AbortController | null>(null);
+  const stoppedCountRef = useRef(0);
 
   const tenantId = (session?.user as any)?.tenantId;
   const headers = { 'Content-Type': 'application/json', 'x-tenant-id': tenantId || '' };
@@ -59,6 +60,7 @@ export default function SettingsPage() {
 
   function startPolling() {
     if (pollRef.current) clearInterval(pollRef.current);
+    stoppedCountRef.current = 0;
     pollRef.current = setInterval(async () => {
       try {
         const res = await fetch('/api/proxy/channels/waha/status', { headers });
@@ -67,6 +69,7 @@ export default function SettingsPage() {
         setWahaStatus(s);
 
         if (s === 'SCAN_QR_CODE') {
+          stoppedCountRef.current = 0;
           fetchQr();
         } else if (s === 'WORKING') {
           if (data.phone) setPhoneNumber(data.phone);
@@ -77,8 +80,15 @@ export default function SettingsPage() {
           setJustConnected(true);
           setTimeout(() => setJustConnected(false), 4000);
         } else if (s === 'STOPPED' || s === 'FAILED') {
-          clearInterval(pollRef.current!);
-          setConnecting(false);
+          // WAHA puede tardar varios segundos en arrancar — esperar 3 resultados
+          // consecutivos de STOPPED/FAILED antes de rendirse (~12 segundos)
+          stoppedCountRef.current += 1;
+          if (stoppedCountRef.current >= 3) {
+            clearInterval(pollRef.current!);
+            setConnecting(false);
+          }
+        } else {
+          stoppedCountRef.current = 0;
         }
       } catch {}
     }, 4000);
