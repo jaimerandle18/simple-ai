@@ -18,6 +18,7 @@ export default function SettingsPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const initFetchAbortRef = useRef<AbortController | null>(null);
   const stoppedCountRef = useRef(0);
+  const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const tenantId = (session?.user as any)?.tenantId;
   const headers = { 'Content-Type': 'application/json', 'x-tenant-id': tenantId || '' };
@@ -31,7 +32,10 @@ export default function SettingsPage() {
     return () => ctrl.abort();
   }, [tenantId]);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+  }, []);
 
   async function fetchStatus(signal?: AbortSignal) {
     try {
@@ -66,14 +70,25 @@ export default function SettingsPage() {
         const res = await fetch('/api/proxy/channels/waha/status', { headers });
         const data = await res.json();
         const s: WahaStatus = data.status || 'STOPPED';
-        setWahaStatus(s);
 
         if (s === 'SCAN_QR_CODE') {
           stoppedCountRef.current = 0;
+          setWahaStatus(s);
           fetchQr();
+          // Timeout de 30s: si no se escanea, resetear
+          if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+          qrTimeoutRef.current = setTimeout(() => {
+            clearInterval(pollRef.current!);
+            setWahaStatus('NOT_CONFIGURED');
+            setQrCode(null);
+            setConnecting(false);
+            setError('Tiempo agotado. Presioná Conectar de nuevo para obtener un nuevo código.');
+          }, 30000);
         } else if (s === 'WORKING') {
+          if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
           if (data.phone) setPhoneNumber(data.phone);
           if (data.pushName) setPushName(data.pushName);
+          setWahaStatus(s);
           setQrCode(null);
           clearInterval(pollRef.current!);
           setConnecting(false);
@@ -81,14 +96,17 @@ export default function SettingsPage() {
           setTimeout(() => setJustConnected(false), 4000);
         } else if (s === 'STOPPED' || s === 'FAILED') {
           // WAHA puede tardar varios segundos en arrancar — esperar 3 resultados
-          // consecutivos de STOPPED/FAILED antes de rendirse (~12 segundos)
+          // consecutivos de STOPPED/FAILED (~12s) antes de rendirse
           stoppedCountRef.current += 1;
           if (stoppedCountRef.current >= 3) {
+            setWahaStatus(s);
             clearInterval(pollRef.current!);
             setConnecting(false);
           }
+          // Durante el grace period, NO pisar el estado STARTING para que el botón no reaparezca
         } else {
           stoppedCountRef.current = 0;
+          setWahaStatus(s);
         }
       } catch {}
     }, 4000);
