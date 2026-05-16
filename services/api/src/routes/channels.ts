@@ -97,7 +97,10 @@ export async function handleChannels(event: APIGatewayProxyEventV2) {
     if (createRes.status === 422 || createRes.status === 409) {
       // Sesión ya existe — asegurarse de que esté iniciada
       await wahaFetch(base, apiKey, `/api/sessions/${SESSION}/start`, { method: 'POST' });
-    } else if (!createRes.ok) {
+    } else if (createRes.ok) {
+      // Sesión recién creada — iniciarla explícitamente
+      await wahaFetch(base, apiKey, `/api/sessions/${SESSION}/start`, { method: 'POST' });
+    } else {
       const err = await createRes.text();
       return error(`WAHA error (${createRes.status}): ${err}`, 502);
     }
